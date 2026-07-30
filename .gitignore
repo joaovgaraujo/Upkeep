@@ -1,0 +1,59 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*_env/
+*_venv/
+venv_*/
+Include/
+Lib/
+Scripts/
+share/
+pyvenv.cfg
+.vscode/
+.kiro/
+.idea/
+.ipynb_checkpoints/
+.pytest_cache/
+.hypothesis/
+*.log
+*.tmp
+Logs/
+vendor/
+_mirror_log.txt
+dist/
+settings.json
+gui/target/
+.DS_Store
+Thumbs.db
+*.pth
+*.pkl
+*.npz
+models/
+# Machine-specific research/reports (contain this PC's inventory)
+StartupReport.md
+deep-research-report*.md
+Startup Report Audit*.md
+Startup.md
+Windows Update Tool Research.md
+# Personal context / raw AI transcripts - not for a public tree
+chat.txt
+research_prompt.md
+# Internal engineering notes: they reference the author's other private work
+# and grow with every session, so each entry is a fresh chance to leak
+# something. Kept locally and in the private archive repo instead.
+JOURNAL.md
+PLAN.md
+# Startup timings measured on ONE machine. Personal (it discloses the exact
+# installed software and hardware) AND misleading to ship as if it described
+# the user's PC. Optional at runtime: absent, the Time column stays blank.
+boot-times.json
+# Local dev tooling (and .claude/skills vendors third-party content
+# that ships no licence of its own, so it must not be redistributed here)
+.claude/
+.mcp.json
+# Downloaded tools + driver packages (Get-NVCleanstall / Get-NvidiaDriver)
+tools/
+# graphify knowledge graph (regenerable: /graphify)
+graphify-out/
