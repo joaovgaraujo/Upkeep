@@ -1,0 +1,450 @@
+{
+    "7zip": {
+        "content": "7-Zip",
+        "category": "Essentials",
+        "winget": "7zip.7zip",
+        "choco": "7zip",
+        "description": "Free, open-source file archiver with a high compression ratio.",
+        "description_pt": "Compactador de arquivos gratuito e de código aberto, com alta taxa de compressão."
+    },
+    "bitwarden": {
+        "content": "Bitwarden",
+        "category": "Essentials",
+        "winget": "Bitwarden.Bitwarden",
+        "choco": "bitwarden",
+        "description": "Free, open-source password manager with sync across devices.",
+        "description_pt": "Gerenciador de senhas gratuito e de código aberto, com sincronização entre dispositivos."
+    },
+    "unigetui": {
+        "content": "UniGetUI",
+        "category": "Essentials",
+        "winget": "MartiCliment.UniGetUI",
+        "choco": "wingetui",
+        "description": "GUI for winget/choco/scoop/pip - browse, install, and update packages.",
+        "description_pt": "Interface gráfica para winget/choco/scoop/pip — navegue, instale e atualize pacotes."
+    },
+    "imageglass": {
+        "content": "ImageGlass",
+        "category": "Essentials",
+        "winget": "DuongDieuPhap.ImageGlass",
+        "choco": "imageglass",
+        "description": "Lightweight, fast image viewer with wide format support.",
+        "description_pt": "Visualizador de imagens leve e rápido, compatível com muitos formatos."
+    },
+    "crystaldiskinfo": {
+        "content": "CrystalDiskInfo",
+        "category": "Utilities",
+        "winget": "CrystalDewWorld.CrystalDiskInfo",
+        "choco": "crystaldiskinfo",
+        "description": "Disk health monitor - S.M.A.R.T. status, temperature, wear indicators.",
+        "description_pt": "Monitor de saúde do disco — status S.M.A.R.T., temperatura e indicadores de desgaste."
+    },
+    "rustdesk": {
+        "content": "RustDesk",
+        "category": "Utilities",
+        "winget": "RustDesk.RustDesk",
+        "choco": "rustdesk",
+        "description": "Open-source remote desktop (TeamViewer alternative), self-hostable.",
+        "description_pt": "Área de trabalho remota de código aberto (alternativa ao TeamViewer), com opção de servidor próprio."
+    },
+    "chrome": {
+        "content": "Google Chrome",
+        "category": "Internet",
+        "winget": "Google.Chrome",
+        "choco": "googlechrome",
+        "description": "Google's web browser.",
+        "description_pt": "Navegador da Google."
+    },
+    "notepad-plus-plus": {
+        "content": "Notepad++",
+        "category": "Essentials",
+        "winget": "Notepad++.Notepad++",
+        "choco": "notepadplusplus",
+        "description": "Free source code editor and Notepad replacement.",
+        "description_pt": "Editor de código gratuito, substituto do Bloco de Notas."
+    },
+    "powertoys": {
+        "content": "Microsoft PowerToys",
+        "category": "Essentials",
+        "winget": "Microsoft.PowerToys",
+        "choco": "powertoys",
+        "description": "Utilities for power users: FancyZones, PowerRename, PowerToys Run, and more.",
+        "description_pt": "Utilitários para usuários avançados: FancyZones, PowerRename, PowerToys Run e mais."
+    },
+    "everything": {
+        "content": "Everything",
+        "category": "Essentials",
+        "winget": "voidtools.Everything",
+        "choco": "everything",
+        "description": "Instant filename search engine for Windows.",
+        "description_pt": "Busca instantânea de arquivos pelo nome no Windows."
+    },
+    "gsudo": {
+        "content": "gsudo",
+        "category": "Essentials",
+        "winget": "gerardog.gsudo",
+        "choco": "gsudo",
+        "description": "sudo for Windows: run commands elevated from any shell.",
+        "description_pt": "sudo para Windows: execute comandos como administrador em qualquer terminal."
+    },
+    "greenshot": {
+        "content": "Greenshot",
+        "category": "Essentials",
+        "winget": "Greenshot.Greenshot",
+        "choco": "greenshot",
+        "description": "Light-weight screenshot tool with built-in editor.",
+        "description_pt": "Ferramenta leve de captura de tela com editor embutido."
+    },
+    "teracopy": {
+        "content": "TeraCopy",
+        "category": "Essentials",
+        "winget": "CodeSector.TeraCopy",
+        "choco": "teracopy",
+        "description": "Fast file copy/move utility with verification and resume.",
+        "description_pt": "Cópia e movimentação rápida de arquivos, com verificação e retomada."
+    },
+    "wiztree": {
+        "content": "WizTree",
+        "category": "Essentials",
+        "winget": "AntibodySoftware.WizTree",
+        "choco": "wiztree",
+        "description": "Very fast disk space analyzer using the MFT.",
+        "description_pt": "Analisador de espaço em disco muito rápido (usa a MFT)."
+    },
+    "sumatra-pdf": {
+        "content": "Sumatra PDF",
+        "category": "Essentials",
+        "winget": "SumatraPDF.SumatraPDF",
+        "choco": "sumatrapdf",
+        "description": "Lightweight PDF, ebook, and comic book reader.",
+        "description_pt": "Leitor leve de PDF, ebooks e quadrinhos."
+    },
+    "eartrumpet": {
+        "content": "EarTrumpet",
+        "category": "Essentials",
+        "winget": "File-New-Project.EarTrumpet",
+        "choco": "eartrumpet",
+        "description": "Per-app volume control and audio device switcher for Windows.",
+        "description_pt": "Controle de volume por aplicativo e troca rápida de dispositivos de áudio."
+    },
+    "autohotkey": {
+        "content": "AutoHotkey",
+        "category": "Essentials",
+        "winget": "AutoHotkey.AutoHotkey",
+        "choco": "autohotkey",
+        "description": "Scripting language for automation and custom keyboard shortcuts.",
+        "description_pt": "Linguagem de script para automação e atalhos de teclado personalizados."
+    },
+    "git": {
+        "content": "Git",
+        "category": "Development",
+        "winget": "Git.Git",
+        "choco": "git",
+        "description": "Distributed version control system.",
+        "description_pt": "Sistema de controle de versão distribuído."
+    },
+    "github-cli": {
+        "content": "GitHub CLI",
+        "category": "Development",
+        "winget": "GitHub.cli",
+        "choco": "gh",
+        "description": "Command-line tool for interacting with GitHub.",
+        "description_pt": "Ferramenta de linha de comando para interagir com o GitHub."
+    },
+    "github-desktop": {
+        "content": "GitHub Desktop",
+        "category": "Development",
+        "winget": "GitHub.GitHubDesktop",
+        "choco": "github-desktop",
+        "description": "Visual Git client for GitHub repositories.",
+        "description_pt": "Cliente visual de Git para repositórios do GitHub."
+    },
+    "vscode": {
+        "content": "Visual Studio Code",
+        "category": "Development",
+        "winget": "Microsoft.VisualStudioCode",
+        "choco": "vscode",
+        "description": "Free source code editor with debugging and extensions support.",
+        "description_pt": "Editor de código gratuito com depuração e suporte a extensões."
+    },
+    "python": {
+        "content": "Python 3.13",
+        "category": "Development",
+        "winget": "Python.Python.3.13",
+        "choco": "python313",
+        "description": "Python programming language, version 3.13.",
+        "description_pt": "Linguagem de programação Python, versão 3.13."
+    },
+    "nodejs": {
+        "content": "Node.js",
+        "category": "Development",
+        "winget": "OpenJS.NodeJS",
+        "choco": "nodejs",
+        "description": "JavaScript runtime built on Chrome's V8 engine.",
+        "description_pt": "Ambiente de execução JavaScript baseado no motor V8 do Chrome."
+    },
+    "docker-desktop": {
+        "content": "Docker Desktop",
+        "category": "Development",
+        "winget": "Docker.DockerDesktop",
+        "choco": "docker-desktop",
+        "description": "Containers and Kubernetes for local development.",
+        "description_pt": "Contêineres e Kubernetes para desenvolvimento local."
+    },
+    "powershell": {
+        "content": "PowerShell",
+        "category": "Development",
+        "winget": "Microsoft.PowerShell",
+        "choco": "powershell-core",
+        "description": "Cross-platform task automation and scripting shell (PowerShell 7).",
+        "description_pt": "Shell multiplataforma de automação e scripts (PowerShell 7)."
+    },
+    "windows-terminal": {
+        "content": "Windows Terminal",
+        "category": "Development",
+        "winget": "Microsoft.WindowsTerminal",
+        "choco": "microsoft-windows-terminal",
+        "description": "Modern terminal with tabs, panes, and profiles.",
+        "description_pt": "Terminal moderno com abas, painéis e perfis."
+    },
+    "cmake": {
+        "content": "CMake",
+        "category": "Development",
+        "winget": "Kitware.CMake",
+        "choco": "cmake",
+        "description": "Cross-platform build system generator.",
+        "description_pt": "Gerador de sistemas de build multiplataforma."
+    },
+    "vlc": {
+        "content": "VLC Media Player",
+        "category": "Media",
+        "winget": "VideoLAN.VLC",
+        "choco": "vlc",
+        "description": "Free, open-source, cross-platform multimedia player.",
+        "description_pt": "Player multimídia gratuito, de código aberto e multiplataforma."
+    },
+    "ffmpeg": {
+        "content": "FFmpeg",
+        "category": "Media",
+        "winget": "Gyan.FFmpeg",
+        "choco": "ffmpeg",
+        "description": "Command-line toolkit for recording, converting, and streaming audio/video.",
+        "description_pt": "Kit de ferramentas de linha de comando para gravar, converter e transmitir áudio e vídeo."
+    },
+    "handbrake": {
+        "content": "HandBrake",
+        "category": "Media",
+        "winget": "HandBrake.HandBrake",
+        "choco": "handbrake",
+        "description": "Open-source video transcoder.",
+        "description_pt": "Conversor de vídeo de código aberto."
+    },
+    "mkvtoolnix": {
+        "content": "MKVToolNix",
+        "category": "Media",
+        "winget": "MoritzBunkus.MKVToolNix",
+        "choco": "mkvtoolnix",
+        "description": "Tools to create, alter, and inspect Matroska (MKV) files.",
+        "description_pt": "Ferramentas para criar, editar e inspecionar arquivos Matroska (MKV)."
+    },
+    "obs-studio": {
+        "content": "OBS Studio",
+        "category": "Media",
+        "winget": "OBSProject.OBSStudio",
+        "choco": "obs-studio",
+        "description": "Free and open-source software for video recording and live streaming.",
+        "description_pt": "Software gratuito e de código aberto para gravar vídeo e fazer transmissões ao vivo."
+    },
+    "k-lite-codec-pack": {
+        "content": "K-Lite Codec Pack Standard",
+        "category": "Media",
+        "winget": "CodecGuide.K-LiteCodecPack.Standard",
+        "choco": "k-litecodecpack-standard",
+        "description": "Collection of audio and video codecs for media playback.",
+        "description_pt": "Coleção de codecs de áudio e vídeo para reprodução de mídia."
+    },
+    "yt-dlp": {
+        "content": "yt-dlp",
+        "category": "Media",
+        "winget": "yt-dlp.yt-dlp",
+        "choco": "yt-dlp",
+        "description": "Command-line audio/video downloader, a youtube-dl fork.",
+        "description_pt": "Baixa áudio e vídeo pela linha de comando; derivado do youtube-dl."
+    },
+    "brave": {
+        "content": "Brave",
+        "category": "Internet",
+        "winget": "Brave.Brave",
+        "choco": "brave",
+        "description": "Privacy-focused web browser that blocks ads and trackers.",
+        "description_pt": "Navegador focado em privacidade que bloqueia anúncios e rastreadores."
+    },
+    "firefox": {
+        "content": "Firefox",
+        "category": "Internet",
+        "winget": "Mozilla.Firefox",
+        "choco": "firefox",
+        "description": "Open-source web browser with strong privacy and customization.",
+        "description_pt": "Navegador de código aberto com forte privacidade e personalização."
+    },
+    "librewolf": {
+        "content": "LibreWolf",
+        "category": "Internet",
+        "winget": "LibreWolf.LibreWolf",
+        "choco": "librewolf",
+        "description": "Privacy-hardened fork of Firefox.",
+        "description_pt": "Versão do Firefox reforçada para privacidade."
+    },
+    "qbittorrent": {
+        "content": "qBittorrent",
+        "category": "Internet",
+        "winget": "qBittorrent.qBittorrent",
+        "choco": "qbittorrent",
+        "description": "Free and open-source BitTorrent client.",
+        "description_pt": "Cliente BitTorrent gratuito e de código aberto."
+    },
+    "jdownloader": {
+        "content": "JDownloader",
+        "category": "Internet",
+        "winget": "AppWork.JDownloader",
+        "choco": "jdownloader2",
+        "description": "Download management tool for one-click hosters and streaming sites.",
+        "description_pt": "Gerenciador de downloads para hospedagens de arquivos e sites de streaming."
+    },
+    "steam": {
+        "content": "Steam",
+        "category": "Gaming",
+        "winget": "Valve.Steam",
+        "choco": "steam-client",
+        "description": "Digital distribution platform for PC games.",
+        "description_pt": "Plataforma de distribuição digital de jogos para PC."
+    },
+    "ea-desktop": {
+        "content": "EA Desktop",
+        "category": "Gaming",
+        "winget": "ElectronicArts.EADesktop",
+        "choco": "na",
+        "description": "Electronic Arts client for game library and updates.",
+        "description_pt": "Cliente da Electronic Arts para biblioteca e atualizações de jogos."
+    },
+    "epic-games-launcher": {
+        "content": "Epic Games Launcher",
+        "category": "Gaming",
+        "winget": "EpicGames.EpicGamesLauncher",
+        "choco": "epicgameslauncher",
+        "description": "Client for the Epic Games Store.",
+        "description_pt": "Cliente da loja Epic Games."
+    },
+    "discord": {
+        "content": "Discord",
+        "category": "Gaming",
+        "winget": "Discord.Discord",
+        "choco": "discord",
+        "description": "Voice, video, and text chat platform.",
+        "description_pt": "Plataforma de chat por voz, vídeo e texto."
+    },
+    "parsec": {
+        "content": "Parsec",
+        "category": "Gaming",
+        "winget": "Parsec.Parsec",
+        "choco": "parsec",
+        "description": "Low-latency remote desktop sharing for gaming and collaboration.",
+        "description_pt": "Área de trabalho remota de baixa latência para jogos e colaboração."
+    },
+    "sunshine": {
+        "content": "Sunshine",
+        "category": "Gaming",
+        "winget": "LizardByte.Sunshine",
+        "choco": "sunshine",
+        "description": "Self-hosted game stream host for Moonlight clients.",
+        "description_pt": "Servidor de streaming de jogos auto-hospedado para clientes Moonlight."
+    },
+    "rufus": {
+        "content": "Rufus",
+        "category": "Utilities",
+        "winget": "Rufus.Rufus",
+        "choco": "rufus",
+        "description": "Utility to format and create bootable USB drives.",
+        "description_pt": "Utilitário para formatar e criar pendrives inicializáveis."
+    },
+    "ventoy": {
+        "content": "Ventoy",
+        "category": "Utilities",
+        "winget": "Ventoy.Ventoy",
+        "choco": "ventoy",
+        "description": "Open-source tool for creating multiboot bootable USB drives.",
+        "description_pt": "Ferramenta de código aberto para criar pendrives multiboot."
+    },
+    "hwinfo": {
+        "content": "HWiNFO",
+        "category": "Utilities",
+        "winget": "REALiX.HWiNFO",
+        "choco": "hwinfo",
+        "description": "Comprehensive hardware information and diagnostics.",
+        "description_pt": "Informações e diagnósticos completos de hardware."
+    },
+    "cpu-z": {
+        "content": "CPU-Z",
+        "category": "Utilities",
+        "winget": "CPUID.CPU-Z",
+        "choco": "cpu-z",
+        "description": "System information tool for CPU, memory, and motherboard.",
+        "description_pt": "Informações do sistema: CPU, memória e placa-mãe."
+    },
+    "bulk-crap-uninstaller": {
+        "content": "Bulk Crap Uninstaller",
+        "category": "Utilities",
+        "winget": "Klocman.BulkCrapUninstaller",
+        "choco": "bulk-crap-uninstaller",
+        "description": "Free uninstaller utility that can remove multiple applications at once.",
+        "description_pt": "Desinstalador gratuito que remove vários programas de uma vez."
+    },
+    "tailscale": {
+        "content": "Tailscale",
+        "category": "Utilities",
+        "winget": "Tailscale.Tailscale",
+        "choco": "tailscale",
+        "description": "Zero-config mesh VPN built on WireGuard.",
+        "description_pt": "VPN em malha sem configuração, baseada no WireGuard."
+    },
+    "nvcleanstall": {
+        "content": "NVCleanstall",
+        "category": "Utilities",
+        "winget": "TechPowerUp.NVCleanstall",
+        "choco": "na",
+        "description": "Customizes NVIDIA driver installations, stripping unwanted components.",
+        "description_pt": "Personaliza a instalação de drivers NVIDIA, removendo componentes indesejados."
+    },
+    "snappy-driver-installer-origin": {
+        "content": "Snappy Driver Installer Origin",
+        "category": "Utilities",
+        "winget": "GlennDelahoy.SnappyDriverInstallerOrigin",
+        "choco": "sdio",
+        "description": "Free and open-source driver updater with an offline driver database.",
+        "description_pt": "Atualizador de drivers gratuito e de código aberto, com banco de drivers offline."
+    },
+    "telegram": {
+        "content": "Telegram Desktop",
+        "category": "Communications",
+        "winget": "Telegram.TelegramDesktop",
+        "choco": "telegram",
+        "description": "Cloud-based instant messaging app.",
+        "description_pt": "Aplicativo de mensagens instantâneas na nuvem."
+    },
+    "signal": {
+        "content": "Signal",
+        "category": "Communications",
+        "winget": "OpenWhisperSystems.Signal",
+        "choco": "signal",
+        "description": "Privacy-focused messaging app with end-to-end encryption.",
+        "description_pt": "Aplicativo de mensagens focado em privacidade, com criptografia de ponta a ponta."
+    },
+    "whatsapp": {
+        "content": "WhatsApp Desktop",
+        "category": "Communications",
+        "winget": "msstore:9NKSQGP7F2NH",
+        "choco": "na",
+        "description": "Official WhatsApp desktop app, distributed through the Microsoft Store.",
+        "description_pt": "Aplicativo oficial do WhatsApp para desktop, distribuído pela Microsoft Store."
+    }
+}

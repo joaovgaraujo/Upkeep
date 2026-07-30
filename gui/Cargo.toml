@@ -1,0 +1,54 @@
+[package]
+# NOTE: the package/lib name deliberately avoids the substrings "update",
+# "install", "setup", "patch" etc. Windows' UAC "installer detection"
+# heuristic auto-requests elevation for *unmanifested* executables whose
+# filename contains those words -- which would otherwise make the `cargo
+# test` lib harness binary (which has no embedded manifest; only the
+# `[[bin]]` target below does) demand elevation too and fail to launch in a
+# non-elevated shell. The real, shipped binary is named "Upkeep"
+# via the [[bin]] section and always carries the requireAdministrator
+# manifest from build.rs, so it is unaffected either way.
+name = "dashboard_core"
+version = "1.3.5"
+edition = "2021"
+description = "Upkeep - update everything, set up anything. GUI wrapper for SystemUpdate_Topgrade.bat"
+build = "build.rs"
+
+[[bin]]
+name = "Upkeep"
+path = "src/main.rs"
+# main.rs is a thin wrapper with no #[cfg(test)] tests of its own (all logic
+# and tests live in the lib target). Disabling its test harness avoids
+# `cargo test` trying to launch the requireAdministrator-manifested exe from
+# an unelevated shell.
+test = false
+
+[dependencies]
+eframe = { version = "0.32", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+egui = "0.32"
+# NO "all_loaders". That feature expands to file+http+image+svg+gif+webp and
+# drags in ~36 crates -- a complete rustls/ring TLS stack, ureq, resvg,
+# tiny-skia, png, gif, webp -- to support loading images from URIs. This crate
+# uses egui_extras for TableBuilder/Column and nothing else (the window icon is
+# raw RGBA bytes for exactly this reason, see main.rs), so none of it was ever
+# reachable. Linking a TLS client into a requireAdministrator binary for a
+# feature that is never called is pure attack surface. It was also the sole
+# source of every actionable duplicate in the dependency graph (bitflags 1.x,
+# png 0.17, webpki-roots 0.26).
+egui_extras = "0.32"
+notify-rust = "4"
+winreg = "0.55"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strip-ansi-escapes = "0.2"
+regex = "1"
+
+[build-dependencies]
+embed-manifest = "1"
+winresource = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
