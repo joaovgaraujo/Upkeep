@@ -15,7 +15,7 @@ fn window_icon() -> egui::IconData {
     }
 }
 
-fn main() -> eframe::Result<()> {
+fn run(renderer: eframe::Renderer) -> eframe::Result<()> {
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1080.0, 720.0])
         .with_min_inner_size([820.0, 560.0])
@@ -24,6 +24,7 @@ fn main() -> eframe::Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport,
+        renderer,
         ..Default::default()
     };
 
@@ -32,4 +33,63 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| Ok(Box::new(DashboardApp::new(cc)))),
     )
+}
+
+/// Errors raised while bringing up the OpenGL context, before the app is
+/// created -- i.e. the machine has no usable OpenGL, not an app failure.
+fn is_opengl_unavailable(err: &eframe::Error) -> bool {
+    matches!(
+        err,
+        eframe::Error::OpenGL(_) | eframe::Error::Glutin(_) | eframe::Error::NoGlutinConfigs(..)
+    )
+}
+
+/// This is a windows-subsystem exe: stderr goes nowhere, so a startup failure
+/// would otherwise look like "double-click, nothing happens".
+#[cfg(windows)]
+fn show_startup_error(err: &eframe::Error) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut std::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            utype: u32,
+        ) -> i32;
+    }
+    const MB_ICONERROR: u32 = 0x10;
+
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let text = wide(&format!(
+        "Upkeep could not start.\n\n{err}\n\n\
+         If this mentions OpenGL, wgpu or an adapter, install the graphics \
+         driver (e.g. via Windows Update) and try again."
+    ));
+    let caption = wide("Upkeep");
+    // SAFETY: both buffers are NUL-terminated UTF-16 and outlive the call.
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_ICONERROR);
+    }
+}
+
+#[cfg(not(windows))]
+fn show_startup_error(err: &eframe::Error) {
+    eprintln!("Upkeep could not start: {err}");
+}
+
+fn main() {
+    // glow stays the default (smallest, what every release so far shipped).
+    // Without a GPU driver (fresh install on "Microsoft Basic Display
+    // Adapter") it fails before any window appears -- retry on wgpu/DX12,
+    // which falls back to WARP. A second run_native in the same process is
+    // fine: NativeOptions::run_and_return defaults to true, so eframe reuses
+    // its thread-local winit event loop.
+    let result = match run(eframe::Renderer::Glow) {
+        Err(err) if is_opengl_unavailable(&err) => run(eframe::Renderer::Wgpu),
+        other => other,
+    };
+    if let Err(err) = result {
+        show_startup_error(&err);
+        std::process::exit(1);
+    }
 }

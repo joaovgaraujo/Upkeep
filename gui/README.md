@@ -73,6 +73,11 @@ Two new optional keys are added:
 - `WinutilCommand` — the PowerShell one-liner run by "Open winutil".
   Defaults to `irm https://christitus.com/win | iex`.
 
+Time limits read by the scripts (minutes, optional): `WinutilTimeoutMin`
+(Setup-NewPC.ps1, default 20), `SDIOTimeoutMin` (Setup-NewPC.ps1, 45) and
+`AppInstallTimeoutMin` (Install-Apps.ps1, per app, 30). Unknown keys are
+preserved on save, so these need no GUI support.
+
 Any other keys already present in `settings.json` (or added by the
 PowerShell dashboard in the future) round-trip untouched — the Rust struct
 uses `#[serde(flatten)]` into a JSON map for anything it doesn't model.

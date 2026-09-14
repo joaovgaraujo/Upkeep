@@ -53,6 +53,41 @@ vale entender:
 - `apps.json` e `presets/` são um catálogo curado, não uma recomendação.
   Leia-os antes de rodar o caminho de PC novo.
 
+## Em um PC recém-instalado
+
+O caminho de PC novo foi feito para seguir em frente quando uma instalação
+nova do Windows ainda está pela metade, em vez de travar na primeira coisa
+que falta:
+
+- **Não precisa do Visual C++ Redistributable.** O runtime C está embutido no
+  `Upkeep.exe`.
+- **Não precisa de driver de vídeo.** Sem OpenGL 2.0 (por exemplo, ainda no
+  "Adaptador de Vídeo Básico da Microsoft") a interface troca de OpenGL para
+  DirectX 12, que também roda no renderizador por software do Windows.
+  Qualquer outra falha ao abrir mostra uma caixa de erro, em vez de a janela
+  simplesmente nunca aparecer.
+- **Reinicialização pendente (Windows Update).** Os poucos ajustes do winutil
+  que passam pelo serviço de manutenção do Windows (remoção do Recall,
+  limpeza de componentes, armazenamento reservado, recursos opcionais) ficam
+  para uma tarefa única que roda no próximo login; todo o resto roda na hora.
+  Instaladores que ativam recursos do Windows (Docker Desktop, WSL e
+  distribuições WSL) são pulados com um aviso até você reiniciar.
+- **Nada espera para sempre.** O winutil (`WinutilTimeoutMin`, padrão 20),
+  cada instalação de app (`AppInstallTimeoutMin`, 30) e o SDIO
+  (`SDIOTimeoutMin`, 45) têm limite de tempo; um processo travado é encerrado
+  junto com seus filhos e a execução continua.
+- **Servidor de download do SDIO inacessível** (acontece em algumas redes
+  brasileiras): o SDIO é pulado quando precisaria baixar algo e o servidor
+  não responde; o Windows Update e o atualizador do fabricante continuam
+  fornecendo drivers.
+- **Driver Intel Thunderbolt em controladoras USB4.** O SDIO instala o driver
+  Thunderbolt avulso da Intel em controladoras feitas para o driver USB4
+  nativo do Windows, o que desativa a porta. O `Repair-Usb4Driver.ps1` roda
+  depois do SDIO (na configuração e no botão Drivers), faz backup desse
+  pacote e o remove.
+- **winget ausente** em uma instalação nova: o App Installer é registrado
+  antes.
+
 ## Opcional: tempos de inicialização
 
 A página de Inicialização pode mostrar quanto tempo cada item de startup
@@ -98,6 +133,7 @@ partir de qualquer lugar.
 | `SystemUpdate_Topgrade.bat` | o motor de atualização; roda também sozinho |
 | `steps/` | etapas de Store, Steam, JDownloader, winget e launchers |
 | `Setup-NewPC.ps1` | configuração de PC novo em uma única execução |
+| `Repair-Usb4Driver.ps1` | remove um driver Intel Thunderbolt errado de controladoras USB4 |
 | `Install-Apps.ps1`, `apps.json`, `presets/` | catálogo e instalador de apps |
 | `installer/` | script do Inno Setup |
 | `UpdateDashboard.ps1`, `Functions.ps1` | painel WPF legado, substituído |

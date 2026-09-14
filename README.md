@@ -48,6 +48,35 @@ needs it. That has consequences worth understanding:
 - `apps.json` and `presets/` are a curated catalog, not a recommendation.
   Read them before running the new-PC path.
 
+## On a freshly installed PC
+
+The new-PC path is built to keep going when a fresh Windows install is only
+half ready, instead of hanging on the first thing that is missing:
+
+- **No Visual C++ Redistributable needed.** The C runtime is linked into
+  `Upkeep.exe`.
+- **No GPU driver needed.** Without OpenGL 2.0 (e.g. still on "Microsoft Basic
+  Display Adapter") the GUI falls back from OpenGL to DirectX 12, which also
+  runs on Windows' software renderer. Any other startup failure shows an error
+  box instead of the window silently never appearing.
+- **Restart pending (Windows Update).** The few winutil tweaks that go
+  through Windows servicing (Recall removal, component cleanup, reserved
+  storage, optional features) are deferred to a one-shot task that runs at the
+  next sign-in; everything else runs now. Installers that enable Windows
+  features (Docker Desktop, WSL and WSL distros) are skipped with a message
+  until you restart.
+- **Nothing waits forever.** winutil (`WinutilTimeoutMin`, default 20), each
+  app install (`AppInstallTimeoutMin`, 30) and SDIO (`SDIOTimeoutMin`, 45) run
+  under a time limit; a stuck process tree is stopped and the run continues.
+- **SDIO download server unreachable** (happens from some Brazilian networks):
+  SDIO is skipped when it would have to download and its server does not
+  answer; Windows Update and the PC maker's updater still provide drivers.
+- **Intel Thunderbolt driver on USB4 controllers.** SDIO installs Intel's
+  standalone Thunderbolt driver on controllers meant for the Windows inbox
+  USB4 driver, which disables the port. `Repair-Usb4Driver.ps1` runs after
+  SDIO (setup and the Drivers button), backs that package up and removes it.
+- **winget missing** on a new install: App Installer is registered first.
+
 ## Optional: startup timings
 
 The Startup page can show how long each startup item takes. That data is not
@@ -90,6 +119,7 @@ The exe finds its resources by walking up from its own directory looking for
 | `SystemUpdate_Topgrade.bat` | the update engine; runnable standalone |
 | `steps/` | Store, Steam, JDownloader, winget and launcher steps |
 | `Setup-NewPC.ps1` | one-shot new-PC setup |
+| `Repair-Usb4Driver.ps1` | removes a wrong Intel Thunderbolt driver from USB4 controllers |
 | `Install-Apps.ps1`, `apps.json`, `presets/` | app catalog and installer |
 | `installer/` | Inno Setup script |
 | `UpdateDashboard.ps1`, `Functions.ps1` | legacy WPF dashboard, superseded |

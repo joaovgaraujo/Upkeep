@@ -1,0 +1,9 @@
+# Link the MSVC C runtime statically. Upkeep's main use is a freshly
+# installed Windows, which often has no Visual C++ Redistributable yet -- a
+# dynamically linked exe then dies before main() with "VCRUNTIME140.dll was
+# not found". Static CRT costs a few hundred KB and removes that dependency.
+#
+# Lives at the repo root so it applies whether cargo runs from here or gui\
+# (Build-Portable.ps1 / Build-Installer.ps1 build from gui\).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
