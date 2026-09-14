@@ -49,6 +49,7 @@ Copy-Item (Join-Path $root 'presets\*.cfg') (Join-Path $dist 'presets')
 Copy-Item (Join-Path $root 'Install-Apps.ps1') $dist
 Copy-Item (Join-Path $root 'Export-InstalledApps.ps1') $dist
 Copy-Item (Join-Path $root 'Setup-NewPC.ps1') $dist
+Copy-Item (Join-Path $root 'Repair-Usb4Driver.ps1') $dist
 Copy-Item (Join-Path $root 'Export-StartupReport.ps1') $dist
 Copy-Item (Join-Path $root 'Get-NVCleanstall.ps1') $dist
 Copy-Item (Join-Path $root 'Get-NvidiaDriver.ps1') $dist

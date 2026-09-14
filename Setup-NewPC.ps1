@@ -67,6 +67,15 @@ param(
     [Parameter()]
     [string]$WinutilConfig,
 
+    # Run even when Windows reports a pending restart. By default the script
+    # schedules itself to resume at next logon and stops instead: servicing
+    # (DISM) calls made by winutil tweaks queue forever until that restart.
+    [switch]$IgnorePendingReboot,
+
+    # Set by the one-shot resume task; prevents re-scheduling in a loop when
+    # a restart did not clear the pending state.
+    [switch]$Resumed,
+
     [switch]$DryRun
 )
 
@@ -93,6 +102,24 @@ function Test-IsAdmin {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# Command line that re-runs this script with the same selection. Shared by
+# self-elevation and the resume-after-restart task. -Toggles is always passed
+# (possibly empty) so "no toggles" is not replaced by the default set.
+function Get-RelaunchArgs {
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+
+    if ($SkipRestorePoint)    { $argList += '-SkipRestorePoint' }
+    if ($SkipTweaks)          { $argList += '-SkipTweaks' }
+    if ($SkipDrivers)         { $argList += '-SkipDrivers' }
+    if ($SkipApps)            { $argList += '-SkipApps' }
+    if ($Oosu)                { $argList += @('-Oosu', '-OosuMode', $OosuMode) }
+    $argList += @('-Toggles', "`"$($Toggles -join ',')`"")
+    if ($AppsPreset)          { $argList += @('-AppsPreset', "`"$AppsPreset`"") }
+    if ($WinutilConfig)       { $argList += @('-WinutilConfig', "`"$WinutilConfig`"") }
+    if ($IgnorePendingReboot) { $argList += '-IgnorePendingReboot' }
+    return $argList
+}
+
 if ($DryRun) {
     if (-not (Test-IsAdmin)) {
         Write-Output "Not running as administrator -- continuing anyway because -DryRun makes no changes."
@@ -100,17 +127,8 @@ if ($DryRun) {
 } elseif (-not (Test-IsAdmin)) {
     Write-Output "Not running as administrator. Requesting elevation..."
 
-    $scriptPath = $MyInvocation.MyCommand.Path
-    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$scriptPath`"")
-
-    if ($SkipRestorePoint) { $argList += '-SkipRestorePoint' }
-    if ($SkipTweaks)       { $argList += '-SkipTweaks' }
-    if ($SkipDrivers)      { $argList += '-SkipDrivers' }
-    if ($SkipApps)         { $argList += '-SkipApps' }
-    if ($Oosu)             { $argList += @('-Oosu', '-OosuMode', $OosuMode) }
-    if ($Toggles)          { $argList += @('-Toggles', ($Toggles -join ',')) }
-    if ($AppsPreset)       { $argList += @('-AppsPreset', "`"$AppsPreset`"") }
-    if ($WinutilConfig)    { $argList += @('-WinutilConfig', "`"$WinutilConfig`"") }
+    $argList = Get-RelaunchArgs
+    if ($Resumed) { $argList += '-Resumed' }
 
     try {
         $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -PassThru -ErrorAction Stop
@@ -163,6 +181,65 @@ if ($DryRun) { Write-Output "Mode: DRY RUN (no changes will be made)" }
 Write-Output ""
 
 # ---------------------------------------------------------------------------
+# Preflight: pending restart
+# ---------------------------------------------------------------------------
+# While Windows has a restart pending (typically after Windows Update, which a
+# fresh install almost always has), CBS accepts new servicing sessions but
+# parks them in its execution queue until the restart. A handful of winutil
+# entries go through servicing (DISM / optional features); run everything
+# else now and hand just those to a one-shot task that runs after the restart.
+$resumeTaskName = 'Upkeep-SetupNewPC-Resume'
+
+# winutil entries whose scripts call DISM / *-WindowsOptionalFeature /
+# *-WindowsCapability. Every WPFFeature* entry installs an optional feature.
+# AppX removal is NOT affected (works fine with a restart pending).
+$servicingEntries = @('WPFTweaksWindowsAI', 'WPFTweaksDiskCleanup', 'WPFTweaksReservedStorage', 'WPFFixesNetwork')
+
+function Test-ServicingEntry {
+    param([string]$Id)
+    return ($Id -like 'WPFFeature*') -or ($servicingEntries -contains $Id)
+}
+
+function Register-ResumeTask {
+    param([string[]]$ArgList)
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ($ArgList -join ' ')
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
+    Register-ScheduledTask -TaskName $resumeTaskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+}
+
+function Test-PendingReboot {
+    $keys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+    )
+    foreach ($key in $keys) {
+        if (Test-Path -LiteralPath $key) { return $true }
+    }
+    return $false
+}
+
+if (-not $DryRun) {
+    # One-shot: whatever brought us here, the resume task has done its job.
+    Unregister-ScheduledTask -TaskName $resumeTaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+
+$deferServicing = $false
+if (Test-PendingReboot) {
+    if ($IgnorePendingReboot -or $Resumed) {
+        Write-Output "[preflight] WARNING: Windows still reports a pending restart. Continuing;"
+        Write-Output "[preflight] the tweaks phase is time-limited if servicing stays blocked."
+    } else {
+        $deferServicing = $true
+        Write-Output "[preflight] Windows has a restart pending (usually from Windows Update)."
+        Write-Output "[preflight] Everything runs now except the few tweaks that need Windows servicing;"
+        Write-Output "[preflight] those are scheduled to run automatically at the next sign-in after a restart."
+    }
+}
+Write-Output ""
+
+# ---------------------------------------------------------------------------
 # Phase 1: Restore point
 # ---------------------------------------------------------------------------
 if ($SkipRestorePoint) {
@@ -194,20 +271,12 @@ if ($SkipRestorePoint) {
 # ---------------------------------------------------------------------------
 # Phase 2: winutil tweaks (headless via -Config)
 # ---------------------------------------------------------------------------
-if ($SkipTweaks) {
-    Write-Output "[tweaks] Skipped by request."
-    Add-PhaseResult 'Windows tweaks' 'Skipped'
-} elseif (-not (Test-Path -LiteralPath $WinutilConfig)) {
-    Write-Output "[tweaks] ERROR: winutil config not found: $WinutilConfig"
-    Add-PhaseResult 'Windows tweaks' 'Failed' 'config not found'
-} elseif ($DryRun) {
-    $ids = @()
-    try { $ids = Get-Content -LiteralPath $WinutilConfig -Raw | ConvertFrom-Json } catch {}
-    Write-Output "[tweaks] [dry-run] Would run winutil headless with config '$WinutilConfig' ($($ids.Count) selections: tweaks + junk-app removal)."
-    Add-PhaseResult 'Windows tweaks' 'DryRun'
-} else {
-    # winutil's -Config mode imports the selection and auto-runs tweaks,
-    # features, app installs and appx removals, then exits without a GUI.
+function Invoke-WinutilConfig {
+    # Runs winutil headless on $ConfigPath in a child process with a time
+    # limit. In-process, a DISM call stuck in the servicing queue cannot be
+    # interrupted and would block every later phase; a child can be killed.
+    param([string]$ConfigPath)
+
     $winutilCommand = Get-SettingString 'WinutilCommand' 'irm https://christitus.com/win | iex'
     $url = $null
     if ($winutilCommand -match '(?i)\b(?:irm|Invoke-RestMethod)\s+(\S+)') {
@@ -215,16 +284,90 @@ if ($SkipTweaks) {
     }
     if (-not $url) { $url = 'https://christitus.com/win' }
 
-    Write-Output "[tweaks] Downloading winutil from $url and applying '$WinutilConfig' (this can take several minutes)..."
+    $timeoutMin = 20
+    $parsedTimeout = 0
+    if ([int]::TryParse((Get-SettingString 'WinutilTimeoutMin' ''), [ref]$parsedTimeout) -and $parsedTimeout -gt 0) {
+        $timeoutMin = $parsedTimeout
+    }
+
+    Write-Output "[tweaks] Downloading winutil from $url and applying '$ConfigPath' (this can take several minutes, limit $timeoutMin min)..."
     try {
         $winutilScript = Invoke-RestMethod -Uri $url -ErrorAction Stop
-        $configFull = (Resolve-Path -LiteralPath $WinutilConfig).Path
-        Invoke-Expression "& { $winutilScript } -Config '$configFull'"
-        Write-Output "[tweaks] winutil finished."
-        Add-PhaseResult 'Windows tweaks' 'OK'
+        $workDir = Join-Path $env:TEMP 'Upkeep'
+        New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+        $winutilFile = Join-Path $workDir 'winutil.ps1'
+        Set-Content -LiteralPath $winutilFile -Value $winutilScript -Encoding UTF8
+
+        $configFull = (Resolve-Path -LiteralPath $ConfigPath).Path
+        $winutilArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$winutilFile`"", '-Config', "`"$configFull`"")
+        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $winutilArgs -NoNewWindow -PassThru
+        if ($proc.WaitForExit($timeoutMin * 60 * 1000)) {
+            Write-Output "[tweaks] winutil finished."
+            Add-PhaseResult 'Windows tweaks' 'OK'
+        } else {
+            Write-Output "[tweaks] ERROR: winutil did not finish within $timeoutMin min -- stopping it and continuing."
+            & taskkill.exe /PID $proc.Id /T /F | Out-Null
+            Add-PhaseResult 'Windows tweaks' 'Failed' "timed out after $timeoutMin min (restart Windows and re-run tweaks)"
+        }
     } catch {
         Write-Output "[tweaks] ERROR: winutil run failed: $($_.Exception.Message)"
         Add-PhaseResult 'Windows tweaks' 'Failed' $_.Exception.Message
+    }
+}
+
+if ($SkipTweaks) {
+    Write-Output "[tweaks] Skipped by request."
+    Add-PhaseResult 'Windows tweaks' 'Skipped'
+} elseif (-not (Test-Path -LiteralPath $WinutilConfig)) {
+    Write-Output "[tweaks] ERROR: winutil config not found: $WinutilConfig"
+    Add-PhaseResult 'Windows tweaks' 'Failed' 'config not found'
+} else {
+    $ids = @()
+    # Parenthesized: PS 5.1's ConvertFrom-Json emits a JSON array as ONE
+    # pipeline object, so without it every id collapses into a single string.
+    try { $ids = @((Get-Content -LiteralPath $WinutilConfig -Raw | ConvertFrom-Json) | ForEach-Object { [string]$_ }) } catch {}
+    $deferredIds = @()
+    if ($deferServicing) { $deferredIds = @($ids | Where-Object { Test-ServicingEntry $_ }) }
+    $nowIds = @($ids | Where-Object { $deferredIds -notcontains $_ })
+
+    if ($DryRun) {
+        Write-Output "[tweaks] [dry-run] Would run winutil headless with config '$WinutilConfig' ($($nowIds.Count) selections: tweaks + junk-app removal)."
+        if ($deferredIds.Count -gt 0) {
+            Write-Output "[tweaks] [dry-run] Restart pending -- would schedule for after restart: $($deferredIds -join ', ')"
+        }
+        Add-PhaseResult 'Windows tweaks' 'DryRun'
+    } else {
+        $configNow = $WinutilConfig
+        if ($deferredIds.Count -gt 0) {
+            # Configs must survive the restart, so ProgramData rather than %TEMP%.
+            $stateDir = Join-Path $env:ProgramData 'Upkeep'
+            New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+            $configNow = Join-Path $stateDir 'winutil-now.json'
+            $configLater = Join-Path $stateDir 'winutil-after-restart.json'
+            # -InputObject keeps a one-element list a JSON array (piping unrolls it).
+            Set-Content -LiteralPath $configNow -Value (ConvertTo-Json -InputObject $nowIds) -Encoding UTF8
+            Set-Content -LiteralPath $configLater -Value (ConvertTo-Json -InputObject $deferredIds) -Encoding UTF8
+            try {
+                Register-ResumeTask @(
+                    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
+                    '-SkipRestorePoint', '-SkipDrivers', '-SkipApps', '-Toggles', '""',
+                    '-WinutilConfig', "`"$configLater`"", '-Resumed'
+                )
+                Write-Output "[tweaks] Scheduled for after restart (needs Windows servicing): $($deferredIds -join ', ')"
+                Add-PhaseResult 'Tweaks after restart' 'Scheduled' ($deferredIds -join ', ')
+            } catch {
+                Write-Output "[tweaks] WARNING: could not schedule the after-restart task: $($_.Exception.Message)"
+                Write-Output "[tweaks] Skipping $($deferredIds -join ', ') -- re-run tweaks after restarting."
+                Add-PhaseResult 'Tweaks after restart' 'Failed' "not scheduled: $($deferredIds -join ', ')"
+            }
+        }
+
+        if ($nowIds.Count -eq 0) {
+            Write-Output "[tweaks] Nothing to apply before the restart."
+            Add-PhaseResult 'Windows tweaks' 'Skipped' 'all selections need a restart first'
+        } else {
+            Invoke-WinutilConfig -ConfigPath $configNow
+        }
     }
 }
 
@@ -323,10 +466,51 @@ function Resolve-SdioExe {
             ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter 'SDIO*.exe' -ErrorAction SilentlyContinue }
     }
     if ($candidates.Count -eq 0) { return $null }
+    # The SDIO folder also ships Windows XP builds (SDIO-XP_x64_R887.exe);
+    # never pick those when a regular build exists.
+    $modern = @($candidates | Where-Object { $_.Name -notmatch '(?i)-XP' })
+    if ($modern.Count -gt 0) { $candidates = $modern }
     # Prefer the lexicographically-newest x64 build, matching the dashboard.
     $x64 = @($candidates | Where-Object { $_.Name -match '(?i)x64' } | Sort-Object Name)
     if ($x64.Count -gt 0) { return $x64[-1].FullName }
     return (@($candidates | Sort-Object Name))[-1].FullName
+}
+
+# True when the URL answers at all (any HTTP status). SDIO's servers are
+# intermittently unreachable or stall from some networks (Brazilian ISPs in
+# particular): winget's download then times out and an unattended SDIO run
+# without local driver packs hangs on the index/torrent download.
+function Test-UrlReachable {
+    param([string]$Url, [int]$TimeoutSec = 15)
+    try {
+        Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop | Out-Null
+        return $true
+    } catch {
+        return [bool]$_.Exception.Response
+    }
+}
+
+# Runs a process with a time limit; returns its exit code, or $null after
+# killing the whole tree on timeout.
+function Invoke-ProcessWithTimeout {
+    param([string]$FilePath, [string[]]$ArgumentList, [string]$WorkingDirectory, [int]$TimeoutMin)
+    $startArgs = @{ FilePath = $FilePath; ArgumentList = $ArgumentList; PassThru = $true; NoNewWindow = $true }
+    if ($WorkingDirectory) { $startArgs.WorkingDirectory = $WorkingDirectory }
+    $proc = Start-Process @startArgs
+    $null = $proc.Handle  # makes ExitCode readable after exit (PS 5.1)
+    if (-not $proc.WaitForExit($TimeoutMin * 60 * 1000)) {
+        & taskkill.exe /PID $proc.Id /T /F | Out-Null
+        return $null
+    }
+    $proc.WaitForExit()
+    return $proc.ExitCode
+}
+
+function Get-SettingInt {
+    param([string]$Name, [int]$Default)
+    $parsed = 0
+    if ([int]::TryParse((Get-SettingString $Name ''), [ref]$parsed) -and $parsed -gt 0) { return $parsed }
+    return $Default
 }
 
 if ($SkipDrivers) {
@@ -334,35 +518,85 @@ if ($SkipDrivers) {
     Add-PhaseResult 'Drivers (SDIO)' 'Skipped'
     Add-PhaseResult 'Drivers (NVIDIA)' 'Skipped'
 } else {
+    $sdioSite = 'https://www.glenn.delahoy.com/'
     $sdioExe = Resolve-SdioExe
+    $sdioHasPacks = $false
+    if ($sdioExe) {
+        $sdioHasPacks = [bool](Get-ChildItem -LiteralPath (Join-Path (Split-Path -Parent $sdioExe) 'drivers') -Filter '*.7z' -ErrorAction SilentlyContinue | Select-Object -First 1)
+    }
+    # Only probe when SDIO would have to download something.
+    $sdioSiteUp = $true
+    if (-not $sdioHasPacks) {
+        $sdioSiteUp = Test-UrlReachable $sdioSite
+    }
+    $sdioSkipReason = $null
 
     if (-not $sdioExe -and -not $DryRun) {
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Output "[drivers] SDIO not found -- installing via winget..."
-            & winget install --id GlennDelahoy.SnappyDriverInstallerOrigin -e --accept-package-agreements --accept-source-agreements --silent
+        if (-not $sdioSiteUp) {
+            $sdioSkipReason = 'SDIO download site unreachable from this network'
+        } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Output "[drivers] SDIO not found -- installing via winget (limit 10 min)..."
+            $wingetExit = Invoke-ProcessWithTimeout -FilePath 'winget' -ArgumentList @('install', '--id', 'GlennDelahoy.SnappyDriverInstallerOrigin', '-e', '--accept-package-agreements', '--accept-source-agreements', '--silent') -TimeoutMin 10
+            if ($null -eq $wingetExit) { Write-Output "[drivers] winget install of SDIO timed out -- stopped it." }
             $sdioExe = Resolve-SdioExe
+            if (-not $sdioExe) { $sdioSkipReason = 'SDIO could not be downloaded (slow or blocked download server)' }
         }
+    } elseif ($sdioExe -and -not $sdioHasPacks -and -not $sdioSiteUp) {
+        $sdioSkipReason = 'no local driver packs and the SDIO download site is unreachable'
     }
 
     if ($DryRun) {
         $shown = if ($sdioExe) { $sdioExe } else { '<would install via winget>' }
-        Write-Output "[drivers] [dry-run] Would run SDIO ($shown) with: -autoinstall -autoclose -license -norestorepnt -nostop"
+        if (-not $sdioSiteUp -and -not $sdioHasPacks) {
+            Write-Output "[drivers] [dry-run] SDIO download site unreachable and no local driver packs -- would skip SDIO."
+        } else {
+            Write-Output "[drivers] [dry-run] Would run SDIO ($shown) with: -autoinstall -autoclose -license -norestorepnt -nostop"
+        }
         Add-PhaseResult 'Drivers (SDIO)' 'DryRun'
+    } elseif ($sdioSkipReason) {
+        Write-Output "[drivers] Skipping SDIO: $sdioSkipReason."
+        Write-Output "[drivers] (Known to happen from some Brazilian networks.) Windows Update and the PC maker's updater"
+        Write-Output "[drivers] (Dell Command | Update, Lenovo Vantage, HP Support Assistant) still provide drivers."
+        Add-PhaseResult 'Drivers (SDIO)' 'Skipped' $sdioSkipReason
     } elseif (-not $sdioExe) {
         Write-Output "[drivers] ERROR: SDIO could not be found or installed. Set SDIOPath in settings.json."
         Add-PhaseResult 'Drivers (SDIO)' 'Failed' 'SDIO not found'
     } else {
-        Write-Output "[drivers] Running SDIO in automatic mode: $sdioExe"
+        $sdioTimeoutMin = Get-SettingInt 'SDIOTimeoutMin' 45
+        Write-Output "[drivers] Running SDIO in automatic mode (limit $sdioTimeoutMin min): $sdioExe"
         Write-Output "[drivers] It installs only drivers it marks as missing or better, and may first download driver packs (can take a while on a fresh PC)."
         try {
             # -norestorepnt: we already made our own restore point above.
             $sdioArgs = @('-autoinstall', '-autoclose', '-license', '-norestorepnt', '-nostop')
-            $proc = Start-Process -FilePath $sdioExe -ArgumentList $sdioArgs -WorkingDirectory (Split-Path -Parent $sdioExe) -Wait -PassThru
-            Write-Output "[drivers] SDIO finished (exit code $($proc.ExitCode))."
-            Add-PhaseResult 'Drivers (SDIO)' 'OK' "exit $($proc.ExitCode)"
+            $sdioExit = Invoke-ProcessWithTimeout -FilePath $sdioExe -ArgumentList $sdioArgs -WorkingDirectory (Split-Path -Parent $sdioExe) -TimeoutMin $sdioTimeoutMin
+            if ($null -eq $sdioExit) {
+                Write-Output "[drivers] SDIO did not finish within $sdioTimeoutMin min (stalled driver-pack download?) -- stopped it and continuing."
+                Add-PhaseResult 'Drivers (SDIO)' 'Failed' "timed out after $sdioTimeoutMin min"
+            } else {
+                Write-Output "[drivers] SDIO finished (exit code $sdioExit)."
+                Add-PhaseResult 'Drivers (SDIO)' 'OK' "exit $sdioExit"
+            }
         } catch {
             Write-Output "[drivers] ERROR: SDIO run failed: $($_.Exception.Message)"
             Add-PhaseResult 'Drivers (SDIO)' 'Failed' $_.Exception.Message
+        }
+    }
+
+    # SDIO has no reliable per-driver exclusion for unattended runs, and it
+    # installs Intel's standalone Thunderbolt driver on USB4 controllers that
+    # must use the Windows inbox driver -- which kills the USB4 port. Undo it.
+    $usb4Script = Join-Path $PSScriptRoot 'Repair-Usb4Driver.ps1'
+    if (-not (Test-Path -LiteralPath $usb4Script)) {
+        Add-PhaseResult 'USB4 driver check' 'Skipped' 'Repair-Usb4Driver.ps1 missing'
+    } elseif ($DryRun) {
+        & $usb4Script -DryRun
+        Add-PhaseResult 'USB4 driver check' 'DryRun'
+    } else {
+        & $usb4Script
+        switch ($LASTEXITCODE) {
+            0       { Add-PhaseResult 'USB4 driver check' 'OK' }
+            3010    { Add-PhaseResult 'USB4 driver check' 'OK' 'replaced Intel Thunderbolt driver; restart needed' }
+            default { Add-PhaseResult 'USB4 driver check' 'Failed' "exit $LASTEXITCODE" }
         }
     }
 
@@ -517,7 +751,11 @@ $phaseResults | Format-Table -AutoSize -Property Phase, Status, Detail | Out-Str
 
 $failedPhases = @($phaseResults | Where-Object { $_.Status -eq 'Failed' })
 if (-not $DryRun) {
-    Write-Output "A restart is recommended to finish applying drivers and tweaks."
+    if ($phaseResults | Where-Object { $_.Phase -eq 'Tweaks after restart' -and $_.Status -eq 'Scheduled' }) {
+        Write-Output "Restart Windows to finish: the remaining tweaks run automatically at your next sign-in."
+    } else {
+        Write-Output "A restart is recommended to finish applying drivers and tweaks."
+    }
 }
 if ($failedPhases.Count -gt 0) {
     Write-Output "Some phases failed: $(($failedPhases | ForEach-Object { $_.Phase }) -join ', ')"

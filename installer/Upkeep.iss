@@ -2,7 +2,7 @@
 ; Build with Build-Installer.ps1 (or: ISCC.exe installer\Upkeep.iss)
 
 #define MyAppName "Upkeep"
-#define MyAppVersion "1.3.5"
+#define MyAppVersion "1.4.0"
 #define MyAppExeName "Upkeep.exe"
 
 [Setup]
@@ -54,6 +54,7 @@ Source: "..\presets\*.cfg"; DestDir: "{app}\presets"; Flags: ignoreversion
 Source: "..\Install-Apps.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Export-InstalledApps.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Setup-NewPC.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\Repair-Usb4Driver.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Export-StartupReport.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Get-NVCleanstall.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Get-NvidiaDriver.ps1"; DestDir: "{app}"; Flags: ignoreversion

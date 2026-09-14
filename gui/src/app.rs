@@ -939,8 +939,13 @@ impl DashboardApp {
         }
         match self.resolve_sdio_exe() {
             Some(exe) => {
-                if let Err(e) = spawn_detached(&exe, &[]) {
-                    self.push_error(format!("Failed to launch SDIO: {e}"));
+                let mut cmd = Command::new(&exe);
+                if let Some(dir) = exe.parent() {
+                    cmd.current_dir(dir);
+                }
+                match cmd.spawn() {
+                    Ok(child) => self.repair_usb4_after(child),
+                    Err(e) => self.push_error(format!("Failed to launch SDIO: {e}")),
                 }
             }
             None => {
@@ -962,6 +967,39 @@ impl DashboardApp {
                 }
             }
         }
+    }
+
+    /// Once SDIO exits, runs Repair-Usb4Driver.ps1 in the background. SDIO
+    /// offers Intel's standalone Thunderbolt driver for USB4 controllers that
+    /// must use the Windows inbox driver, and installing it kills the port;
+    /// the script is a no-op on machines where that did not happen. Output
+    /// goes to Logs\usb4-repair.log (this runs detached from the UI).
+    fn repair_usb4_after(&self, mut sdio: std::process::Child) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let script = root.join("Repair-Usb4Driver.ps1");
+        if !script.is_file() {
+            return;
+        }
+        std::thread::spawn(move || {
+            let _ = sdio.wait();
+            let logs = root.join("Logs");
+            let _ = std::fs::create_dir_all(&logs);
+            let Ok(log) = std::fs::File::create(logs.join("usb4-repair.log")) else {
+                return;
+            };
+            let mut cmd = Command::new("powershell.exe");
+            cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+            cmd.arg(&script);
+            if let Ok(err_log) = log.try_clone() {
+                cmd.stderr(err_log);
+            }
+            cmd.stdout(log);
+            #[cfg(windows)]
+            cmd.creation_flags(engine::CREATE_NO_WINDOW);
+            let _ = cmd.status();
+        });
     }
 
     fn refresh_drivers(&mut self, ctx: &egui::Context) {
