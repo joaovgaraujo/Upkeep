@@ -34,33 +34,9 @@ if %errorLevel% neq 0 (
     exit /b
 )
 
-rem -- Single-instance guard --------------------------------------------------
-rem    mkdir is atomic, so this can't race even if two elevated copies start
-rem    at the same instant. Prevents a double-click plus a scheduled task
-rem    from fighting over the same winget/choco/topgrade caches at once.
-set "LOCKDIR=%TEMP%\SystemUpdate_Topgrade.lock"
-rem    %TEMP% carries the account name, and Windows allows an apostrophe in
-rem    it; escape for the single-quoted PowerShell literal below (see the
-rem    TGCONF_PS note further down for the full explanation).
-set "LOCKDIR_PS=%LOCKDIR:'=''%"
-if exist "%LOCKDIR%" (
-    rem Stale-lock recovery, two independent rules:
-    rem  1. Created before the last boot. %TEMP% survives a restart but no
-    rem     process does, so such a lock CANNOT belong to a live run. This is
-    rem     the common case: kill the GUI (or lose power) mid-run and the bat
-    rem     never reaches its rmdir, leaving a lock that outlives the reboot
-    rem     and reports "already in progress" on a machine running nothing.
-    rem  2. Older than 3 hours, for a run that died without a restart since.
-    powershell -NoProfile -Command ^
-      "$d = Get-Item '%LOCKDIR_PS%' -ErrorAction SilentlyContinue;" ^
-      "if ($d) {" ^
-      "  $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime;" ^
-      "  if ($d.CreationTime -lt $boot -or ((Get-Date) - $d.CreationTime).TotalHours -gt 3) {" ^
-      "    Remove-Item '%LOCKDIR_PS%' -Recurse -Force } }"
-)
-mkdir "%LOCKDIR%" 2>nul
+rem -- Single-instance guard: recover dead owners immediately ----------------
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Manage-EngineLock.ps1" -Action Acquire
 if errorlevel 1 (
-    echo A System Update run is already in progress. Exiting.
     if "%INTERACTIVE%"=="1" pause
     exit /b 1
 )
@@ -115,7 +91,7 @@ if %errorLevel% neq 0 (
         where choco >nul 2>&1
         if !errorLevel! neq 0 (
             echo [error] Neither winget nor choco available. Install topgrade manually.
-            rmdir "%LOCKDIR%" 2>nul
+            powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Manage-EngineLock.ps1" -Action Release
             if "%INTERACTIVE%"=="1" pause
             exit /b 1
         )
@@ -190,7 +166,7 @@ if not "%DASHBOARD_SKIP_APPS%"=="1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Set-UpdateSafety.ps1"
     if errorlevel 1 (
         echo [error] Could not enforce reboot safety. Updates stopped.
-        rmdir "%LOCKDIR%" 2>nul
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Manage-EngineLock.ps1" -Action Release
         exit /b 1
     )
 )
@@ -522,9 +498,8 @@ if "%INTERACTIVE%"=="1" powershell -NoProfile -Command ^
   "} catch {}"
 
 rem Release the single-instance lock BEFORE the closing countdown: the GUI
-rem watchdog kills this process during the countdown, and a kill after this
-rem line must not leave a stale lock that blocks the next run for 3 hours.
-rmdir "%LOCKDIR%" 2>nul
+rem watchdog may stop the process during the countdown.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Manage-EngineLock.ps1" -Action Release
 rem The countdown only makes sense for a double-clicked run. Under the
 rem dashboard, exit straight away: `timeout` can't run without a console
 rem input handle, and exiting cleanly beats being killed by the watchdog.
