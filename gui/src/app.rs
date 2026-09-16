@@ -2007,6 +2007,15 @@ impl DashboardApp {
                     .inner_margin(egui::Margin::same(14))
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new(title).size(17.0).strong().color(fg));
+                        if !had_summary {
+                            for line in self
+                                .log_lines
+                                .iter()
+                                .filter(|line| line.starts_with("[guard]"))
+                            {
+                                ui.label(line);
+                            }
+                        }
                         ui.add_space(4.0);
                         let cats: [(bool, &str, Category); 4] = [
                             (
@@ -2407,7 +2416,21 @@ impl DashboardApp {
             .show(ui, |ui| {
                 match &self.summary {
                     None => {
-                        ui.label(egui::RichText::new(t.summary_empty).weak().italics());
+                        let message = if self.engine_exit.is_some() {
+                            t.status_engine_no_summary
+                        } else {
+                            t.summary_empty
+                        };
+                        ui.label(egui::RichText::new(message).weak().italics());
+                        if self.engine_exit.is_some() {
+                            for line in self
+                                .log_lines
+                                .iter()
+                                .filter(|line| line.starts_with("[guard]"))
+                            {
+                                ui.label(line);
+                            }
+                        }
                     }
                     Some(summary) => {
                         let rows: Vec<(&str, &Option<String>)> = vec![
