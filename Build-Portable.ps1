@@ -19,14 +19,17 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 
 # --- 1. Build the GUI exe ---
-$cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+# PATH first so CI runners (and anyone with a non-default CARGO_HOME) work;
+# the profile path is the fallback for a plain local rustup install.
+$cargo = (Get-Command cargo -ErrorAction SilentlyContinue).Source
+if (-not $cargo) { $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
 $exe = Join-Path $root 'gui\target\release\Upkeep.exe'
 if (-not $SkipCargoBuild) {
-    if (-not (Test-Path $cargo)) { throw "cargo not found at $cargo" }
+    if (-not (Test-Path $cargo)) { throw "cargo not found on PATH or at $cargo" }
     Write-Host '[build] cargo build --release...'
     Push-Location (Join-Path $root 'gui')
     try {
-        & $cargo build --release
+        & $cargo build --release --locked
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
     }
     finally { Pop-Location }
@@ -35,6 +38,11 @@ if (-not (Test-Path $exe)) { throw "GUI exe not found: $exe" }
 
 # --- 2. Assemble dist folder ---
 $dist = Join-Path $root 'dist\Upkeep'
+$dist = [IO.Path]::GetFullPath($dist)
+$distRoot = [IO.Path]::GetFullPath((Join-Path $root 'dist')).TrimEnd('\') + '\'
+if (-not $dist.StartsWith($distRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Portable output must stay inside $distRoot"
+}
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $dist 'steps') -Force | Out-Null

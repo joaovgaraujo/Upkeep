@@ -11,12 +11,15 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 
 if (-not $SkipCargoBuild) {
-    $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
-    if (-not (Test-Path $cargo)) { throw "cargo not found at $cargo" }
+    # PATH first so CI runners (and anyone with a non-default CARGO_HOME) work;
+    # the profile path is the fallback for a plain local rustup install.
+    $cargo = (Get-Command cargo -ErrorAction SilentlyContinue).Source
+    if (-not $cargo) { $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
+    if (-not (Test-Path $cargo)) { throw "cargo not found on PATH or at $cargo" }
     Write-Host '[build] cargo build --release...'
     Push-Location (Join-Path $root 'gui')
     try {
-        & $cargo build --release
+        & $cargo build --release --locked
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
     }
     finally { Pop-Location }

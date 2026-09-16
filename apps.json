@@ -183,6 +183,14 @@
         "description": "JavaScript runtime built on Chrome's V8 engine.",
         "description_pt": "Ambiente de execução JavaScript baseado no motor V8 do Chrome."
     },
+    "wsl": {
+        "content": "Windows Subsystem for Linux",
+        "category": "Development",
+        "winget": "Microsoft.WSL",
+        "choco": "na",
+        "description": "Linux runtime for Windows. Setup prepares required features and offers restart continuation; choose a Linux distribution separately.",
+        "description_pt": "Ambiente Linux para Windows. Prepara os recursos e oferece continuar após reiniciar; escolha uma distribuição separadamente."
+    },
     "docker-desktop": {
         "content": "Docker Desktop",
         "category": "Development",

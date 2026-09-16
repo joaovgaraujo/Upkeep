@@ -23,6 +23,11 @@ use std::os::windows::process::CommandExt;
 
 const MAX_LOG_LINES: usize = 10_000;
 
+/// Shown in the bottom status bar. Deliberately not translated: a name and a
+/// URL read the same in both languages.
+const AUTHOR: &str = "joaovguedes";
+const REPO_URL: &str = "https://github.com/joaovgaraujo/Upkeep";
+
 /// Top-level pages, ordered by how often a non-technical user needs them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -230,7 +235,10 @@ impl DashboardApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
 
-        let root = settings::resolve_root();
+        Self::from_root(&cc.egui_ctx, settings::resolve_root())
+    }
+
+    fn from_root(ctx: &egui::Context, root: Option<PathBuf>) -> Self {
         let bat_path = root.as_ref().map(|r| r.join(settings::BAT_NAME));
         let mut settings = root
             .as_ref()
@@ -282,11 +290,11 @@ impl DashboardApp {
             .map(|r| system::load_boot_times(r))
             .unwrap_or_default();
 
-        let lang = Lang::from_code(&settings.language);
+        let lang = i18n::resolve_language(&settings.language);
         let theme_choice = ThemeChoice::from_code(&settings.theme);
-        theme::set_choice(&cc.egui_ctx, theme_choice);
+        theme::set_choice(ctx, theme_choice);
         let ui_scale = settings.ui_scale;
-        theme::set_scale(&cc.egui_ctx, ui_scale);
+        theme::set_scale(ctx, ui_scale);
 
         let startup_error = if root.is_none() {
             Some(i18n::startup_error(lang, settings::BAT_NAME))
@@ -337,12 +345,12 @@ impl DashboardApp {
             newpc_restore: true,
             newpc_tweaks: true,
             newpc_toggles: true,
-            newpc_drivers: true,
-            newpc_oosu: true,
+            newpc_drivers: false,
+            newpc_oosu: false,
             newpc_apps: true,
             opt_tweaks: optimize::TWEAKS.iter().map(|t| t.default_on).collect(),
             opt_toggles: optimize::TOGGLES.iter().map(|t| t.default_on).collect(),
-            opt_oosu: true,
+            opt_oosu: false,
             opt_oosu_auto: true,
             installed_apps: Vec::new(),
             installed_loading: false,
@@ -383,12 +391,12 @@ impl DashboardApp {
         i18n::tr(self.lang)
     }
 
-    fn set_language(&mut self, lang: Lang) {
-        if self.lang == lang {
-            return;
+    fn set_language(&mut self, preference: &str) {
+        self.settings.language = preference.to_string();
+        self.lang = i18n::resolve_language(preference);
+        if self.root.is_none() {
+            self.startup_error = Some(i18n::startup_error(self.lang, settings::BAT_NAME));
         }
-        self.lang = lang;
-        self.settings.language = lang.code().to_string();
         if let Some(root) = &self.root {
             let _ = settings::save_settings(root, &self.settings);
         }
@@ -566,7 +574,11 @@ impl DashboardApp {
                 if let Some(v) = &summary.windows_update {
                     self.status.insert(
                         Category::WindowsUpdate,
-                        if summary_value_is_benign(v) { Status::Ok } else { Status::Error },
+                        if summary_value_is_benign(v) {
+                            Status::Ok
+                        } else {
+                            Status::Error
+                        },
                     );
                 }
             }
@@ -590,7 +602,11 @@ impl DashboardApp {
                 if let Some(v) = &summary.steam {
                     self.status.insert(
                         Category::Steam,
-                        if summary_value_is_benign(v) { Status::Ok } else { Status::Error },
+                        if summary_value_is_benign(v) {
+                            Status::Ok
+                        } else {
+                            Status::Error
+                        },
                     );
                 }
             }
@@ -598,7 +614,11 @@ impl DashboardApp {
                 if let Some(v) = &summary.store {
                     self.status.insert(
                         Category::Store,
-                        if summary_value_is_benign(v) { Status::Ok } else { Status::Error },
+                        if summary_value_is_benign(v) {
+                            Status::Ok
+                        } else {
+                            Status::Error
+                        },
                     );
                 }
             }
@@ -666,11 +686,7 @@ impl DashboardApp {
             ),
             (self.cat_store, t.toast_cat_store, Category::Store),
             (self.cat_apps, t.toast_cat_apps, Category::Apps),
-            (
-                self.cat_steam,
-                t.toast_cat_steam,
-                Category::Steam,
-            ),
+            (self.cat_steam, t.toast_cat_steam, Category::Steam),
         ];
 
         let mut all_ok = true;
@@ -1117,23 +1133,25 @@ struct Milestone {
 /// Builds the milestone plan for the checked categories, normalized to 100.
 /// Weights are rough relative durations observed in real runs; the raw
 /// (untagged) topgrade output is folded into the winget phase's weight.
-/// `[ea]` and the second `[launch]` are deliberately absent: `[ea]` also
-/// fires during setup (detection), which would jump the bar forward.
+/// The independent clients share one final phase because they overlap.
 fn build_milestones(wu: bool, store: bool, apps: bool, steam: bool) -> Vec<Milestone> {
     let mut plan: Vec<(&'static str, f32)> = vec![("setup", 3.0)];
-    if store {
-        plan.push(("store", 12.0));
-    }
     if apps {
         plan.push(("launch", 1.0));
-        plan.push(("jdownloader", 4.0));
         plan.push(("winget", 32.0)); // includes the raw topgrade output
     }
     if wu {
         plan.push(("winupdate", 24.0));
     }
-    if steam {
-        plan.push(("steam", 16.0));
+    if store || apps || steam {
+        let weight = if steam {
+            16.0
+        } else if store {
+            12.0
+        } else {
+            4.0
+        };
+        plan.push(("clients", weight));
     }
 
     let total: f32 = plan.iter().map(|(_, w)| w).sum();
@@ -1317,7 +1335,11 @@ fn time_cell(ui: &mut egui::Ui, secs: Option<f64>) {
         } else {
             theme::subtle_text()
         };
-        ui.label(egui::RichText::new(format!("{secs:.1} s")).small().color(color));
+        ui.label(
+            egui::RichText::new(format!("{secs:.1} s"))
+                .small()
+                .color(color),
+        );
     }
 }
 
@@ -1340,7 +1362,11 @@ fn advice_badge(
                 .on_hover_text(e.note(lang));
         }
         None => {
-            ui.label(egui::RichText::new("\u{2014}").small().color(theme::status_idle()));
+            ui.label(
+                egui::RichText::new("\u{2014}")
+                    .small()
+                    .color(theme::status_idle()),
+            );
         }
     }
 }
@@ -1402,6 +1428,19 @@ fn status_chip(ui: &mut egui::Ui, t: &Strings, status: Status) {
 
 impl eframe::App for DashboardApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.draw(ctx);
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.is_running {
+            self.request_stop();
+            self.wait_for_engine_stop(Duration::from_secs(5));
+        }
+    }
+}
+
+impl DashboardApp {
+    fn draw(&mut self, ctx: &egui::Context) {
         // Point the palette accessors at whichever theme egui is painting
         // with this frame -- it can change under us when the OS flips
         // light/dark while we're running.
@@ -1432,8 +1471,24 @@ impl eframe::App for DashboardApp {
                 // Advanced and System host their own virtualized scroll
                 // areas (log, tables) - nesting those inside another
                 // ScrollArea breaks stick-to-bottom and row virtualization.
-                Page::Advanced => self.draw_advanced_page(ui, ctx),
-                Page::System => self.draw_system_page(ui, ctx),
+                Page::Advanced | Page::System => {
+                    let min_width = if self.page == Page::System {
+                        940.0
+                    } else {
+                        780.0
+                    };
+                    egui::ScrollArea::horizontal()
+                        .id_salt("wide_data_pages")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_min_width(min_width);
+                            if self.page == Page::System {
+                                self.draw_system_page(ui, ctx);
+                            } else {
+                                self.draw_advanced_page(ui, ctx);
+                            }
+                        });
+                }
                 page => {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
@@ -1450,15 +1505,6 @@ impl eframe::App for DashboardApp {
 
         self.draw_reboot_dialog(ctx);
         self.draw_nvclean_help(ctx);
-    }
-
-    /// Don't leave the update chain running with no UI attached to it.
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if !self.is_running {
-            return;
-        }
-        self.request_stop();
-        self.wait_for_engine_stop(Duration::from_secs(5));
     }
 }
 
@@ -1479,105 +1525,116 @@ fn centered_column(ui: &mut egui::Ui, preferred_w: f32, add: impl FnOnce(&mut eg
     let w = available.min(target);
     let pad = ((available - w) / 2.0).max(0.0);
     ui.horizontal(|ui| {
+        let spacing = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 0.0;
         ui.add_space(pad);
-        ui.vertical(|ui| {
-            ui.set_width(w);
-            add(ui);
-        });
+        ui.allocate_ui_with_layout(
+            egui::vec2(w, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = spacing;
+                ui.set_width(w);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                add(ui);
+            },
+        );
     });
 }
 
 impl DashboardApp {
     fn draw_top_banner(&mut self, ctx: &egui::Context) {
         let t = self.tr();
-        let mut selected_lang: Option<Lang> = None;
+        let mut selected_lang: Option<&str> = None;
         let mut selected_theme: Option<ThemeChoice> = None;
         let mut selected_scale: Option<f32> = None;
 
         egui::TopBottomPanel::top("top_banner").show(ctx, |ui| {
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.heading(egui::RichText::new(t.app_heading).strong());
-                ui.add_space(8.0);
-                ui.add(
-                    egui::Label::new(
+                ui.menu_button(t.appearance_label, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height((ctx.screen_rect().height() - 70.0).max(80.0))
+                        .show(ui, |ui| {
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                            ui.set_max_width(
+                                (ctx.screen_rect().width() - 32.0).clamp(160.0, 320.0),
+                            );
+                            ui.label(t.language_label);
+                            let language_name = |code: &str| match code {
+                                "en" => t.language_en,
+                                "pt-BR" => t.language_pt_br,
+                                _ => t.language_system,
+                            };
+                            egui::ComboBox::from_id_salt("language")
+                                .selected_text(language_name(&self.settings.language))
+                                .show_ui(ui, |ui| {
+                                    for code in ["system", "en", "pt-BR"] {
+                                        if ui
+                                            .selectable_label(
+                                                self.settings.language == code,
+                                                language_name(code),
+                                            )
+                                            .clicked()
+                                        {
+                                            selected_lang = Some(code);
+                                        }
+                                    }
+                                });
+                            ui.separator();
+                            ui.label(t.text_size_label);
+                            let pct = |s: f32| format!("{}%", (s * 100.0).round() as i32);
+                            egui::ComboBox::from_id_salt("text_size")
+                                .selected_text(pct(self.ui_scale))
+                                .show_ui(ui, |ui| {
+                                    for scale in theme::UI_SCALES {
+                                        if ui
+                                            .selectable_label(
+                                                (self.ui_scale - scale).abs() < f32::EPSILON,
+                                                pct(scale),
+                                            )
+                                            .clicked()
+                                        {
+                                            selected_scale = Some(scale);
+                                        }
+                                    }
+                                });
+                            if ui.button(t.reset_text_size).clicked() {
+                                selected_scale = Some(theme::windows_text_scale());
+                            }
+                            ui.separator();
+                            ui.label(t.theme_label);
+                            let theme_name = |c: ThemeChoice| match c {
+                                ThemeChoice::System => t.theme_system,
+                                ThemeChoice::Light => t.theme_light,
+                                ThemeChoice::Dark => t.theme_dark,
+                            };
+                            egui::ComboBox::from_id_salt("theme")
+                                .selected_text(theme_name(self.theme_choice))
+                                .show_ui(ui, |ui| {
+                                    for choice in
+                                        [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark]
+                                    {
+                                        if ui
+                                            .selectable_label(
+                                                self.theme_choice == choice,
+                                                theme_name(choice),
+                                            )
+                                            .clicked()
+                                        {
+                                            selected_theme = Some(choice);
+                                        }
+                                    }
+                                });
+                        });
+                });
+                if ctx.screen_rect().width() > 1000.0 {
+                    ui.label(
                         egui::RichText::new(t.tagline)
                             .small()
                             .color(theme::subtle_text()),
-                    )
-                    .truncate(),
-                );
+                    );
+                }
             });
-
-            // Controls get their own row. A right_to_left group claims the
-            // remaining width of whatever row it is in, so sharing a row with
-            // the heading meant they simply drew on top of each other once
-            // Text size went above 100% - first over the tagline, then over
-            // the heading itself.
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    egui::ComboBox::from_label(t.language_label)
-                        .selected_text(match self.lang {
-                            Lang::En => t.language_en,
-                            Lang::PtBr => t.language_pt_br,
-                        })
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(self.lang == Lang::En, t.language_en)
-                                .clicked()
-                            {
-                                selected_lang = Some(Lang::En);
-                            }
-                            if ui
-                                .selectable_label(self.lang == Lang::PtBr, t.language_pt_br)
-                                .clicked()
-                            {
-                                selected_lang = Some(Lang::PtBr);
-                            }
-                        });
-
-                    ui.add_space(12.0);
-                    // Text size. egui's own Ctrl+Plus / Ctrl+Minus still work;
-                    // this makes the choice discoverable and persistent.
-                    let pct = |s: f32| format!("{}%", (s * 100.0).round() as i32);
-                    egui::ComboBox::from_label(t.text_size_label)
-                        .selected_text(pct(self.ui_scale))
-                        .show_ui(ui, |ui| {
-                            for scale in theme::UI_SCALES {
-                                let selected = (self.ui_scale - scale).abs() < f32::EPSILON;
-                                if ui.selectable_label(selected, pct(scale)).clicked() {
-                                    selected_scale = Some(scale);
-                                }
-                            }
-                        });
-
-                    ui.add_space(12.0);
-                    let theme_name = |c: ThemeChoice| match c {
-                        ThemeChoice::System => t.theme_system,
-                        ThemeChoice::Light => t.theme_light,
-                        ThemeChoice::Dark => t.theme_dark,
-                    };
-                    egui::ComboBox::from_label(t.theme_label)
-                        .selected_text(theme_name(self.theme_choice))
-                        .show_ui(ui, |ui| {
-                            for choice in
-                                [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark]
-                            {
-                                if ui
-                                    .selectable_label(
-                                        self.theme_choice == choice,
-                                        theme_name(choice),
-                                    )
-                                    .clicked()
-                                {
-                                    selected_theme = Some(choice);
-                                }
-                            }
-                        });
-                });
-            });
-            ui.add_space(4.0);
-
             if let Some(err) = &self.startup_error {
                 egui::Frame::new()
                     .fill(theme::banner_warn_bg())
@@ -1593,7 +1650,7 @@ impl DashboardApp {
                     .fill(theme::banner_caution_bg())
                     .inner_margin(egui::Margin::same(8))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.colored_label(theme::warn_amber(), t.reboot_detected_prefix);
                             if self.reboot.cbs {
                                 ui.colored_label(theme::warn_amber(), t.reboot_cbs);
@@ -1627,25 +1684,79 @@ impl DashboardApp {
     fn draw_nav(&mut self, ctx: &egui::Context) {
         let t = self.tr();
         egui::TopBottomPanel::top("nav_bar").show(ctx, |ui| {
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                for (page, label) in [
-                    (Page::Update, t.nav_update),
-                    (Page::Install, t.nav_install),
-                    (Page::NewPc, t.nav_newpc),
-                    (Page::Optimize, t.nav_optimize),
-                    (Page::System, t.nav_system),
-                    (Page::Tools, t.nav_tools),
-                    (Page::Advanced, t.nav_advanced),
-                ] {
-                    if tab_button(ui, self.page == page, label, 16.0).clicked() {
-                        self.page = page;
+            let pages = [
+                (Page::Update, t.nav_update),
+                (Page::Install, t.nav_install),
+                (Page::NewPc, t.nav_newpc),
+                (Page::Optimize, t.nav_optimize),
+                (Page::System, t.nav_system),
+                (Page::Tools, t.nav_tools),
+                (Page::Advanced, t.nav_advanced),
+            ];
+            let needed: f32 = pages
+                .iter()
+                .map(|(_, label)| {
+                    ui.painter()
+                        .layout_no_wrap(
+                            (*label).to_string(),
+                            egui::FontId::proportional(16.0),
+                            egui::Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                        + 2.0 * ui.spacing().button_padding.x
+                        + 2.0 * ui.spacing().item_spacing.x
+                        + 4.0
+                })
+                .sum();
+            if needed > ui.available_width() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(t.navigation_label);
+                    let current = pages.iter().find(|(page, _)| *page == self.page).unwrap().1;
+                    egui::ComboBox::from_id_salt("compact_navigation")
+                        .selected_text(current)
+                        .width(ui.available_width().min(240.0))
+                        .show_ui(ui, |ui| {
+                            for (page, label) in pages {
+                                ui.selectable_value(&mut self.page, page, label);
+                            }
+                        });
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    for (page, label) in pages {
+                        if tab_button(ui, self.page == page, label, 16.0).clicked() {
+                            self.page = page;
+                        }
                     }
-                }
-            });
-            ui.add_space(6.0);
+                });
+            }
         });
+    }
+
+    fn open_update_review(&mut self, mode: &str) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let mut cmd = Command::new("powershell.exe");
+        cmd.args([
+            "-NoProfile",
+            "-NoExit",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ]);
+        if mode == "ManageResume" {
+            cmd.arg(root.join("steps/Manage-SetupResume.ps1"));
+        } else {
+            cmd.arg(root.join("steps/Review-Updates.ps1"))
+                .args(["-Mode", mode]);
+        }
+        #[cfg(windows)]
+        cmd.creation_flags(engine::CREATE_NEW_CONSOLE);
+        if let Err(e) = cmd.spawn() {
+            self.push_error(format!("Could not open review: {e}"));
+        }
     }
 
     fn draw_update_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1654,6 +1765,96 @@ impl DashboardApp {
             ui.add_space(14.0);
             ui.label(egui::RichText::new(t.update_title).size(26.0).strong());
             ui.label(egui::RichText::new(t.update_subtitle).color(theme::subtle_text()));
+            ui.add_space(10.0);
+
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        !self.is_running,
+                        egui::Button::new(if self.lang == Lang::PtBr {
+                            "Ver atualizações de apps"
+                        } else {
+                            "Preview app updates"
+                        }),
+                    )
+                    .clicked()
+                {
+                    self.open_update_review("Preview");
+                }
+                if ui
+                    .add_enabled(
+                        !self.is_running,
+                        egui::Button::new(if self.lang == Lang::PtBr {
+                            "Repetir apps com falha"
+                        } else {
+                            "Retry failed app updates"
+                        }),
+                    )
+                    .clicked()
+                {
+                    self.open_update_review("RetryUpdates");
+                }
+            });
+            if ui
+                .button(if self.lang == Lang::PtBr {
+                    "Gerenciar continuação após reiniciar"
+                } else {
+                    "Manage restart continuation"
+                })
+                .clicked()
+            {
+                self.open_update_review("ManageResume");
+            }
+            let any_checked =
+                self.cat_windows_update || self.cat_store || self.cat_apps || self.cat_steam;
+            let run_enabled = any_checked && !self.is_running && self.root.is_some();
+            let run_button = egui::Button::new(
+                egui::RichText::new(if self.is_running {
+                    t.running_button
+                } else {
+                    t.run_cta
+                })
+                .strong()
+                .size(18.0)
+                .color(theme::on_accent()),
+            )
+            .fill(if run_enabled {
+                theme::accent_green()
+            } else {
+                theme::accent_green_dim()
+            })
+            .min_size(egui::vec2(ui.available_width(), 48.0));
+            if ui.add_enabled(run_enabled, run_button).clicked() {
+                self.start_run(ctx, false);
+            }
+
+            // Stop: only while a run is in flight. Once pressed the flag is
+            // latched, so it disables itself until EngineExited arrives -
+            // pressing it again would do nothing anyway.
+            if self.is_running {
+                ui.add_space(6.0);
+                let stopping = self
+                    .engine_stop
+                    .as_ref()
+                    .is_some_and(|s| s.load(Ordering::Relaxed));
+                let stop_button = egui::Button::new(
+                    egui::RichText::new(if stopping {
+                        t.stopping_button
+                    } else {
+                        t.stop_cta
+                    })
+                    .strong()
+                    .size(16.0)
+                    .color(theme::on_accent()),
+                )
+                .fill(theme::status_error())
+                .min_size(egui::vec2(ui.available_width(), 36.0));
+                if ui.add_enabled(!stopping, stop_button).clicked() {
+                    self.request_stop();
+                    self.push_log("[run] Stop requested - ending the run...".to_string());
+                }
+            }
+
             ui.add_space(10.0);
 
             let wu_status = self.status(Category::WindowsUpdate);
@@ -1711,52 +1912,6 @@ impl DashboardApp {
 
             ui.add_space(10.0);
 
-            let any_checked =
-                self.cat_windows_update || self.cat_store || self.cat_apps || self.cat_steam;
-            let run_enabled = any_checked && !self.is_running && self.root.is_some();
-            let run_button = egui::Button::new(
-                egui::RichText::new(if self.is_running {
-                    t.running_button
-                } else {
-                    t.run_cta
-                })
-                .strong()
-                .size(18.0)
-                .color(theme::on_accent()),
-            )
-            .fill(if run_enabled {
-                theme::accent_green()
-            } else {
-                theme::accent_green_dim()
-            })
-            .min_size(egui::vec2(ui.available_width(), 48.0));
-            if ui.add_enabled(run_enabled, run_button).clicked() {
-                self.start_run(ctx, false);
-            }
-
-            // Stop: only while a run is in flight. Once pressed the flag is
-            // latched, so it disables itself until EngineExited arrives -
-            // pressing it again would do nothing anyway.
-            if self.is_running {
-                ui.add_space(6.0);
-                let stopping = self
-                    .engine_stop
-                    .as_ref()
-                    .is_some_and(|s| s.load(Ordering::Relaxed));
-                let stop_button = egui::Button::new(
-                    egui::RichText::new(if stopping { t.stopping_button } else { t.stop_cta })
-                        .strong()
-                        .size(16.0)
-                        .color(theme::on_accent()),
-                )
-                .fill(theme::status_error())
-                .min_size(egui::vec2(ui.available_width(), 36.0));
-                if ui.add_enabled(!stopping, stop_button).clicked() {
-                    self.request_stop();
-                    self.push_log("[run] Stop requested - ending the run...".to_string());
-                }
-            }
-
             // Progress (kept visible after completion)
             if self.is_running || self.engine_exit.is_some() {
                 ui.add_space(6.0);
@@ -1766,7 +1921,7 @@ impl DashboardApp {
                         .animate(self.is_running),
                 );
                 if self.is_running {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         if let Some(m) = self.milestones.get(self.milestone_idx) {
                             ui.label(
                                 egui::RichText::new(format!(
@@ -1778,20 +1933,17 @@ impl DashboardApp {
                             );
                         }
                         if let Some(start) = self.run_start {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{} {}",
-                                            t.elapsed_prefix,
-                                            format_duration(start.elapsed())
-                                        ))
-                                        .small()
-                                        .color(theme::subtle_text()),
-                                    );
-                                },
-                            );
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} {}",
+                                        t.elapsed_prefix,
+                                        format_duration(start.elapsed())
+                                    ))
+                                    .small()
+                                    .color(theme::subtle_text()),
+                                );
+                            });
                         }
                     });
                     if let Some(last) = self.last_output {
@@ -1847,11 +1999,7 @@ impl DashboardApp {
                         theme::warn_amber(),
                     )
                 } else {
-                    (
-                        t.result_ok_title,
-                        theme::banner_ok_bg(),
-                        theme::status_ok(),
-                    )
+                    (t.result_ok_title, theme::banner_ok_bg(), theme::status_ok())
                 };
                 egui::Frame::new()
                     .fill(bg)
@@ -1868,11 +2016,7 @@ impl DashboardApp {
                             ),
                             (self.cat_store, t.toast_cat_store, Category::Store),
                             (self.cat_apps, t.toast_cat_apps, Category::Apps),
-                            (
-                                self.cat_steam,
-                                t.toast_cat_steam,
-                                Category::Steam,
-                            ),
+                            (self.cat_steam, t.toast_cat_steam, Category::Steam),
                         ];
                         for (checked, label, cat) in cats {
                             if !checked {
@@ -1911,7 +2055,7 @@ impl DashboardApp {
     fn draw_bottom_status(&self, ctx: &egui::Context) {
         let t = self.tr();
         egui::TopBottomPanel::bottom("bottom_status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let run_state = if self.is_running {
                     t.status_running.to_string()
                 } else if let Some(exit) = self.engine_exit {
@@ -1939,38 +2083,45 @@ impl DashboardApp {
                 } else {
                     t.status_idle.to_string()
                 };
-                ui.label(run_state);
-
-                ui.separator();
-                let engine_indicator = self.bat_path.as_ref().map_or_else(
-                    || t.engine_not_found.to_string(),
-                    |p| p.display().to_string(),
+                ui.label(run_state).on_hover_text(
+                    self.bat_path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
                 );
-                ui.label(egui::RichText::new(engine_indicator).small().weak());
 
                 if let Some(err) = &self.last_error {
                     ui.separator();
-                    ui.colored_label(
-                        theme::status_error(),
-                        format!("{} {err}", t.last_error_prefix),
-                    );
+                    ui.colored_label(theme::status_error(), t.last_error_prefix)
+                        .on_hover_text(err);
                 }
 
-                if self.is_running {
-                    if let Some(start) = self.run_start {
-                        let elapsed = start.elapsed();
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(format_duration(elapsed));
-                        });
+                // Right-aligned block. In a right_to_left layout the first
+                // widget added is the rightmost one, so the credit pins to the
+                // far right and the run timer sits to its left.
+                ui.horizontal(|ui| {
+                    ui.hyperlink_to(
+                        egui::RichText::new(format!("v{} - {AUTHOR}", env!("CARGO_PKG_VERSION")))
+                            .small()
+                            .weak(),
+                        REPO_URL,
+                    )
+                    .on_hover_text(REPO_URL);
+
+                    if self.is_running {
+                        if let Some(start) = self.run_start {
+                            ui.separator();
+                            ui.label(format_duration(start.elapsed()));
+                        }
                     }
-                }
+                });
             });
         });
     }
 
     fn draw_advanced_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let t = self.tr();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.active_tab, Tab::Log, t.tab_log);
             ui.selectable_value(&mut self.active_tab, Tab::Summary, t.tab_summary);
             ui.selectable_value(&mut self.active_tab, Tab::Pins, t.tab_pins);
@@ -1995,7 +2146,7 @@ impl DashboardApp {
         ui.label(egui::RichText::new(t.system_title).size(22.0).strong());
         ui.label(egui::RichText::new(t.system_subtitle).color(theme::subtle_text()));
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (section, label) in [
                 (SystemSection::Startup, t.tab_startup),
                 (SystemSection::Tasks, t.tab_tasks),
@@ -2058,12 +2209,8 @@ impl DashboardApp {
 
         let lang = self.lang;
         let show_advanced = self.system_show_advanced;
-        let is_protected = |s: &TaskEntry| {
-            matches!(
-                task_advice(s).map(|e| e.advice),
-                Some(Advice::Keep)
-            )
-        };
+        let is_protected =
+            |s: &TaskEntry| matches!(task_advice(s).map(|e| e.advice), Some(Advice::Keep));
         let hidden_count = if show_advanced {
             0
         } else {
@@ -2162,12 +2309,7 @@ impl DashboardApp {
                                 }
                             });
                             row.col(|ui| {
-                                advice_badge(
-                                    ui,
-                                    t,
-                                    lang,
-                                    task_advice(s),
-                                );
+                                advice_badge(ui, t, lang, task_advice(s));
                             });
                             row.col(|ui| {
                                 time_cell(ui, *secs);
@@ -2189,10 +2331,9 @@ impl DashboardApp {
                                 let what = match task_advice(s) {
                                     Some(e) => e.note(lang).to_string(),
                                     None if !s.description.is_empty() => s.description.clone(),
-                                    None => i18n::runs_at_signin(
-                                        lang,
-                                        &system::exe_name(&s.command),
-                                    ),
+                                    None => {
+                                        i18n::runs_at_signin(lang, &system::exe_name(&s.command))
+                                    }
                                 };
                                 ui.add(
                                     egui::Label::new(
@@ -2202,7 +2343,10 @@ impl DashboardApp {
                                     )
                                     .truncate(),
                                 )
-                                .on_hover_text(format!("{what}\n\n{}{}\n{}", s.path, s.name, s.command));
+                                .on_hover_text(format!(
+                                    "{what}\n\n{}{}\n{}",
+                                    s.path, s.name, s.command
+                                ));
                             });
                         });
                     });
@@ -2375,7 +2519,11 @@ impl DashboardApp {
                         {
                             action = Some(act);
                         }
-                        ui.label(egui::RichText::new(desc).small().color(theme::subtle_text()));
+                        ui.label(
+                            egui::RichText::new(desc)
+                                .small()
+                                .color(theme::subtle_text()),
+                        );
                     });
                 }
             });
@@ -2463,7 +2611,9 @@ impl DashboardApp {
                                 "[drivers] Clean NVIDIA driver update started in its own window."
                                     .to_string(),
                             ),
-                            Err(e) => self.push_error(format!("Failed to start driver update: {e}")),
+                            Err(e) => {
+                                self.push_error(format!("Failed to start driver update: {e}"))
+                            }
                         }
                     }
                 }
@@ -2543,12 +2693,14 @@ impl DashboardApp {
                     };
                     let resp = frame
                         .show(ui, |ui| {
-                            ui.set_width(240.0);
+                            ui.set_width(ui.available_width().min(240.0));
                             ui.set_min_height(96.0);
                             ui.vertical(|ui| {
                                 ui.label(egui::RichText::new(display_name).size(17.0).strong());
                                 ui.label(
-                                    egui::RichText::new(desc).small().color(theme::subtle_text()),
+                                    egui::RichText::new(desc)
+                                        .small()
+                                        .color(theme::subtle_text()),
                                 );
                                 ui.label(
                                     egui::RichText::new(format!("{count} {}", t.pack_apps_suffix))
@@ -2588,7 +2740,7 @@ impl DashboardApp {
                 ui.add_space(10.0);
                 ui.label(egui::RichText::new(t.install_step2_hint).color(theme::subtle_text()));
                 let selected_count = self.bundle_apps.iter().filter(|a| a.selected).count();
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.small_button(t.bundle_select_all).clicked() {
                         for a in &mut self.bundle_apps {
                             a.selected = true;
@@ -2610,7 +2762,7 @@ impl DashboardApp {
                     let cols = ((ui.available_width() - 36.0) / MIN_COL_W)
                         .floor()
                         .clamp(2.0, 4.0) as usize;
-                    let col_w = ((ui.available_width() - 36.0) / cols as f32).max(220.0);
+                    let col_w = ((ui.available_width() - 36.0).max(0.0) / cols as f32).max(0.0);
                     let apps = &mut self.bundle_apps;
                     let mut i = 0;
                     while i < apps.len() {
@@ -2657,7 +2809,7 @@ impl DashboardApp {
                                             resp.on_hover_text(&hover);
                                         }
                                         if !desc.is_empty() {
-                                            let d = ui.horizontal(|ui| {
+                                            let d = ui.horizontal_wrapped(|ui| {
                                                 ui.add_space(24.0);
                                                 // Explicit wrap, not truncate: this
                                                 // is the app's whole visible
@@ -2770,46 +2922,128 @@ impl DashboardApp {
             ui.label(egui::RichText::new(t.setup_subtitle).color(theme::subtle_text()));
             ui.add_space(10.0);
 
-            explained_phase(ui, &mut self.newpc_restore, t.setup_restore_title, t.setup_restore_desc, |_| {});
+            explained_phase(
+                ui,
+                &mut self.newpc_restore,
+                t.setup_restore_title,
+                t.setup_restore_desc,
+                |_| {},
+            );
 
             // The tweak/toggle selection is shared with the Optimize page,
             // so reviewing it in either place edits the same set.
             let details = t.setup_details_header;
             let caution_badge = t.optimize_caution_badge;
             let opt_tweaks = &mut self.opt_tweaks;
-            explained_phase(ui, &mut self.newpc_tweaks, t.setup_tweaks_title, t.setup_tweaks_desc, |ui| {
-                egui::CollapsingHeader::new(egui::RichText::new(details).small())
-                    .id_salt("newpc_tweaks_details")
-                    .show(ui, |ui| {
-                        for (i, tw) in optimize::TWEAKS.iter().enumerate() {
-                            let (title, why) = i18n::tweak_text(lang, tw.slug);
-                            let badge = tw.caution.then_some(caution_badge);
-                            option_row(ui, &mut opt_tweaks[i], title, why, badge);
-                        }
-                    });
-            });
+            explained_phase(
+                ui,
+                &mut self.newpc_tweaks,
+                t.setup_tweaks_title,
+                t.setup_tweaks_desc,
+                |ui| {
+                    egui::CollapsingHeader::new(egui::RichText::new(details).small())
+                        .id_salt("newpc_tweaks_details")
+                        .show(ui, |ui| {
+                            for (i, tw) in optimize::TWEAKS.iter().enumerate() {
+                                let (title, why) = i18n::tweak_text(lang, tw.slug);
+                                let badge = tw.caution.then_some(caution_badge);
+                                option_row(ui, &mut opt_tweaks[i], title, why, badge);
+                            }
+                        });
+                },
+            );
 
             let opt_toggles = &mut self.opt_toggles;
-            explained_phase(ui, &mut self.newpc_toggles, t.setup_toggles_title, t.setup_toggles_desc, |ui| {
-                egui::CollapsingHeader::new(egui::RichText::new(details).small())
-                    .id_salt("newpc_toggles_details")
-                    .show(ui, |ui| {
-                        for (i, tg) in optimize::TOGGLES.iter().enumerate() {
-                            let (title, why) = i18n::toggle_text(lang, tg.slug);
-                            option_row(ui, &mut opt_toggles[i], title, why, None);
-                        }
-                    });
-            });
+            explained_phase(
+                ui,
+                &mut self.newpc_toggles,
+                t.setup_toggles_title,
+                t.setup_toggles_desc,
+                |ui| {
+                    egui::CollapsingHeader::new(egui::RichText::new(details).small())
+                        .id_salt("newpc_toggles_details")
+                        .show(ui, |ui| {
+                            for (i, tg) in optimize::TOGGLES.iter().enumerate() {
+                                let (title, why) = i18n::toggle_text(lang, tg.slug);
+                                option_row(ui, &mut opt_toggles[i], title, why, None);
+                            }
+                        });
+                },
+            );
 
-            explained_phase(ui, &mut self.newpc_drivers, t.setup_drivers_title, t.setup_drivers_desc, |_| {});
+            explained_phase(
+                ui,
+                &mut self.newpc_drivers,
+                t.setup_drivers_title,
+                t.setup_drivers_desc,
+                |_| {},
+            );
             let oosu_auto = &mut self.opt_oosu_auto;
-            explained_phase(ui, &mut self.newpc_oosu, t.setup_oosu_title, t.setup_oosu_desc, |ui| {
-                ui.radio_value(oosu_auto, true, t.oosu_mode_auto);
-                ui.radio_value(oosu_auto, false, t.oosu_mode_manual);
-            });
-            explained_phase(ui, &mut self.newpc_apps, t.setup_apps_title, t.setup_apps_desc, |_| {});
+            explained_phase(
+                ui,
+                &mut self.newpc_oosu,
+                t.setup_oosu_title,
+                t.setup_oosu_desc,
+                |ui| {
+                    ui.radio_value(oosu_auto, true, t.oosu_mode_auto);
+                    ui.radio_value(oosu_auto, false, t.oosu_mode_manual);
+                },
+            );
+            explained_phase(
+                ui,
+                &mut self.newpc_apps,
+                t.setup_apps_title,
+                t.setup_apps_desc,
+                |_| {},
+            );
 
             ui.add_space(12.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(if lang == Lang::PtBr {
+                        "Ver plano (sem instalar)"
+                    } else {
+                        "Preview setup (no installs)"
+                    })
+                    .clicked()
+                {
+                    self.spawn_newpc(true);
+                }
+                if ui
+                    .button(if lang == Lang::PtBr {
+                        "Repetir instalações com falha"
+                    } else {
+                        "Retry failed installs"
+                    })
+                    .clicked()
+                {
+                    self.open_update_review("RetryApps");
+                }
+                if ui
+                    .button(if lang == Lang::PtBr {
+                        "Relatórios e backups"
+                    } else {
+                        "Reports and backups"
+                    })
+                    .clicked()
+                {
+                    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+                        let _ = Command::new("explorer.exe")
+                            .arg(std::path::Path::new(&local).join("Upkeep/Reports"))
+                            .spawn();
+                    }
+                }
+            });
+            if ui
+                .button(if lang == Lang::PtBr {
+                    "Gerenciar continuação após reiniciar"
+                } else {
+                    "Manage restart continuation"
+                })
+                .clicked()
+            {
+                self.open_update_review("ManageResume");
+            }
             let any = self.newpc_restore
                 || self.newpc_tweaks
                 || self.newpc_toggles
@@ -2830,7 +3064,7 @@ impl DashboardApp {
             })
             .min_size(egui::vec2(ui.available_width(), 48.0));
             if ui.add_enabled(enabled, button).clicked() {
-                self.spawn_newpc();
+                self.spawn_newpc(false);
             }
             ui.label(
                 egui::RichText::new(t.setup_console_note)
@@ -2851,11 +3085,11 @@ impl DashboardApp {
             ui.label(egui::RichText::new(t.optimize_title).size(26.0).strong());
             ui.label(egui::RichText::new(t.optimize_subtitle).color(theme::subtle_text()));
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button(t.bundle_select_all).clicked() {
                     self.opt_tweaks.iter_mut().for_each(|b| *b = true);
                     self.opt_toggles.iter_mut().for_each(|b| *b = true);
-                    self.opt_oosu = true;
+                    self.opt_oosu = false;
                 }
                 if ui.button(t.bundle_select_none).clicked() {
                     self.opt_tweaks.iter_mut().for_each(|b| *b = false);
@@ -2865,7 +3099,7 @@ impl DashboardApp {
                 if ui.button(t.optimize_reset_button).clicked() {
                     self.opt_tweaks = optimize::TWEAKS.iter().map(|t| t.default_on).collect();
                     self.opt_toggles = optimize::TOGGLES.iter().map(|t| t.default_on).collect();
-                    self.opt_oosu = true;
+                    self.opt_oosu = false;
                     self.opt_oosu_auto = true;
                 }
             });
@@ -2873,7 +3107,7 @@ impl DashboardApp {
 
             theme::card().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.strong(t.optimize_group_tweaks);
                     if ui.small_button(t.bundle_select_all).clicked() {
                         self.opt_tweaks.iter_mut().for_each(|b| *b = true);
@@ -2911,7 +3145,7 @@ impl DashboardApp {
             ui.add_space(8.0);
             theme::card().show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.strong(t.optimize_group_toggles);
                     if ui.small_button(t.bundle_select_all).clicked() {
                         self.opt_toggles.iter_mut().for_each(|b| *b = true);
@@ -3021,14 +3255,18 @@ impl DashboardApp {
         } else {
             String::new()
         };
-        cmd.args(["-Toggles", &toggles]);
+        if toggles.is_empty() {
+            cmd.arg("-NoToggles");
+        } else {
+            cmd.args(["-Toggles", &toggles]);
+        }
         Ok(())
     }
 
     /// Launches Setup-NewPC.ps1 for the New PC page's phase selection in a
     /// visible console (the script self-elevates via UAC). Tweaks/toggles
     /// use the granular selection shared with the Optimize page.
-    fn spawn_newpc(&mut self) {
+    fn spawn_newpc(&mut self, preview: bool) {
         let Some(root) = self.root.clone() else {
             return;
         };
@@ -3036,6 +3274,12 @@ impl DashboardApp {
         let mut cmd = Command::new("powershell.exe");
         cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
         cmd.arg(&script);
+        if preview {
+            cmd.arg("-DryRun");
+        }
+        if self.newpc_drivers {
+            cmd.arg("-InstallDrivers");
+        }
         if !self.newpc_restore {
             cmd.arg("-SkipRestorePoint");
         }
@@ -3049,12 +3293,9 @@ impl DashboardApp {
             cmd.args(["-Oosu", "-OosuMode"]);
             cmd.arg(if self.opt_oosu_auto { "auto" } else { "manual" });
         }
-        if let Err(e) = self.push_selection_args(
-            &mut cmd,
-            &root,
-            self.newpc_tweaks,
-            self.newpc_toggles,
-        ) {
+        if let Err(e) =
+            self.push_selection_args(&mut cmd, &root, self.newpc_tweaks, self.newpc_toggles)
+        {
             self.push_error(e);
             return;
         }
@@ -3144,7 +3385,7 @@ impl DashboardApp {
             });
 
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(t.pins_new_label);
             ui.text_edit_singleline(&mut self.new_pin_id);
             egui::ComboBox::from_id_salt("new_pin_manager")
@@ -3176,7 +3417,7 @@ impl DashboardApp {
 
         // Pick from installed packages instead of typing the id by hand.
         ui.add_space(10.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(t.pins_detect_hint).weak());
             if ui
                 .add_enabled(
@@ -3193,7 +3434,7 @@ impl DashboardApp {
             }
         });
         if !self.installed_apps.is_empty() {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(t.filter_label);
                 ui.text_edit_singleline(&mut self.pin_filter);
             });
@@ -3210,11 +3451,10 @@ impl DashboardApp {
                         {
                             continue;
                         }
-                        let already =
-                            self.pins.iter().any(|p| {
-                                p.manager == app.manager && p.id.eq_ignore_ascii_case(&app.id)
-                            });
-                        ui.horizontal(|ui| {
+                        let already = self.pins.iter().any(|p| {
+                            p.manager == app.manager && p.id.eq_ignore_ascii_case(&app.id)
+                        });
+                        ui.horizontal_wrapped(|ui| {
                             if ui
                                 .add_enabled(!already, egui::Button::new(t.pins_add).small())
                                 .clicked()
@@ -3259,7 +3499,7 @@ impl DashboardApp {
         let t = self.tr();
         ui.label(egui::RichText::new(t.drivers_intro).weak());
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(!self.drivers_loading, egui::Button::new(t.drivers_refresh))
                 .clicked()
@@ -3465,8 +3705,7 @@ impl DashboardApp {
                             row.col(|ui| {
                                 // Curated note when known, else Windows' own
                                 // (localized) service description.
-                                let what = match advice::service_advice(&s.name, &s.display_name)
-                                {
+                                let what = match advice::service_advice(&s.name, &s.display_name) {
                                     Some(e) => e.note(lang).to_string(),
                                     None => s.description.clone(),
                                 };
@@ -3478,11 +3717,13 @@ impl DashboardApp {
                                     )
                                     .truncate(),
                                 )
-                                .on_hover_text(if s.description.is_empty() {
-                                    what.clone()
-                                } else {
-                                    format!("{what}\n\n{}", s.description)
-                                });
+                                .on_hover_text(
+                                    if s.description.is_empty() {
+                                        what.clone()
+                                    } else {
+                                        format!("{what}\n\n{}", s.description)
+                                    },
+                                );
                             });
                             row.col(|ui| {
                                 advice_badge(
@@ -3545,7 +3786,10 @@ impl DashboardApp {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!self.autostart_loading, egui::Button::new(t.drivers_refresh))
+                .add_enabled(
+                    !self.autostart_loading,
+                    egui::Button::new(t.drivers_refresh),
+                )
                 .clicked()
             {
                 self.refresh_startup(ctx);
@@ -3576,7 +3820,10 @@ impl DashboardApp {
         let hidden_count = if show_advanced {
             0
         } else {
-            self.autostart_entries.iter().filter(|s| is_protected(s)).count()
+            self.autostart_entries
+                .iter()
+                .filter(|s| is_protected(s))
+                .count()
         };
         if hidden_count > 0 {
             ui.label(
@@ -3606,7 +3853,9 @@ impl DashboardApp {
                 // asc = enabled first ("On" on top).
                 SortField::Status => b.enabled.cmp(&a.enabled),
                 SortField::Advice => advice_sort_rank(advice::startup_advice(&a.name, &a.command))
-                    .cmp(&advice_sort_rank(advice::startup_advice(&b.name, &b.command))),
+                    .cmp(&advice_sort_rank(advice::startup_advice(
+                        &b.name, &b.command,
+                    ))),
                 SortField::Time => cmp_time(*ta, *tb),
                 _ => std::cmp::Ordering::Equal,
             }
@@ -3681,7 +3930,12 @@ impl DashboardApp {
                                 }
                             });
                             row.col(|ui| {
-                                advice_badge(ui, t, lang, advice::startup_advice(&s.name, &s.command));
+                                advice_badge(
+                                    ui,
+                                    t,
+                                    lang,
+                                    advice::startup_advice(&s.name, &s.command),
+                                );
                             });
                             row.col(|ui| {
                                 time_cell(ui, *secs);
@@ -3702,10 +3956,9 @@ impl DashboardApp {
                                 // program it launches; full command on hover.
                                 let what = match advice::startup_advice(&s.name, &s.command) {
                                     Some(e) => e.note(lang).to_string(),
-                                    None => i18n::runs_at_signin(
-                                        lang,
-                                        &system::exe_name(&s.command),
-                                    ),
+                                    None => {
+                                        i18n::runs_at_signin(lang, &system::exe_name(&s.command))
+                                    }
                                 };
                                 ui.add(
                                     egui::Label::new(
@@ -3755,8 +4008,11 @@ impl DashboardApp {
         let tx = self.tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result =
-                system::set_startup_enabled(&entry.approved_key, &entry.approved_name, !entry.enabled);
+            let result = system::set_startup_enabled(
+                &entry.approved_key,
+                &entry.approved_name,
+                !entry.enabled,
+            );
             if let Err(e) = result {
                 let _ = tx.send(AppEvent::Error(format!(
                     "Startup toggle '{}' failed: {e}",
@@ -3890,8 +4146,7 @@ fn tab_button(ui: &mut egui::Ui, selected: bool, label: &str, size: f32) -> egui
     let text = egui::RichText::new(label).size(size);
     let resp = if selected {
         ui.add(
-            egui::Button::new(text.strong().color(theme::on_accent()))
-                .fill(theme::accent_green()),
+            egui::Button::new(text.strong().color(theme::on_accent())).fill(theme::accent_green()),
         )
     } else {
         ui.add(egui::Button::selectable(false, text))
@@ -3970,10 +4225,14 @@ fn explained_phase(
                 } else {
                     egui::RichText::new(title).size(16.0).strong()
                 };
-                let title_resp = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                let title_resp = ui.add(egui::Label::new(text).wrap().sense(egui::Sense::click()));
                 let desc_resp = ui.add(
-                    egui::Label::new(egui::RichText::new(desc).small().color(theme::subtle_text()))
-                        .sense(egui::Sense::click()),
+                    egui::Label::new(
+                        egui::RichText::new(desc)
+                            .small()
+                            .color(theme::subtle_text()),
+                    )
+                    .sense(egui::Sense::click()),
                 );
                 if title_resp.hovered() || desc_resp.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -4003,7 +4262,7 @@ fn option_grid_cols(available_w: f32) -> usize {
 /// Column width for `option_grid_cols`, accounting for the grid's own
 /// inter-column spacing.
 fn option_grid_col_w(available_w: f32, cols: usize) -> f32 {
-    ((available_w - 20.0 * (cols as f32 - 1.0)) / cols as f32).max(300.0)
+    ((available_w - 20.0 * (cols as f32 - 1.0)) / cols as f32).max(0.0)
 }
 
 /// One optimization row: the checkbox carries the title as its label (so
@@ -4017,13 +4276,19 @@ fn option_row(
 ) {
     ui.horizontal(|ui| {
         let text = if *checked {
-            egui::RichText::new(title).strong().color(theme::accent_green())
+            egui::RichText::new(title)
+                .strong()
+                .color(theme::accent_green())
         } else {
             egui::RichText::new(title).strong()
         };
         ui.checkbox(checked, text);
         if let Some(badge) = caution_badge {
-            ui.label(egui::RichText::new(badge).small().color(theme::warn_amber()));
+            ui.label(
+                egui::RichText::new(badge)
+                    .small()
+                    .color(theme::warn_amber()),
+            );
         }
     });
     ui.horizontal(|ui| {
@@ -4031,8 +4296,7 @@ fn option_row(
         // Explicit wrap: labels inside a horizontal layout don't wrap on
         // their own, which let long explanations stretch the whole card.
         ui.add(
-            egui::Label::new(egui::RichText::new(why).small().color(theme::subtle_text()))
-                .wrap(),
+            egui::Label::new(egui::RichText::new(why).small().color(theme::subtle_text())).wrap(),
         );
     });
     ui.add_space(4.0);
@@ -4058,23 +4322,43 @@ fn category_row(
         .show(ui, |ui| {
             ui.set_min_height(48.0);
             ui.add_enabled_ui(enabled, |ui| {
+                let compact = ui.available_width() < 520.0;
+                let width = ui.available_width();
                 ui.horizontal_top(|ui| {
                     ui.checkbox(checked, "");
-                    // Reserve a fixed slot for the status chip so the text
-                    // column has the same width in every card. Sized for the
-                    // longest status word across languages ("executando"/
-                    // "ignorado" in pt-BR run longer than their English
-                    // counterparts), plus the spinner shown while running.
-                    let chip_w = 112.0;
-                    ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - chip_w).max(0.0));
-                        ui.label(egui::RichText::new(title).size(16.0).strong());
-                        ui.label(egui::RichText::new(desc).small().color(theme::subtle_text()));
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    let chip_w = if compact {
+                        0.0
+                    } else {
+                        112.0 + ui.spacing().item_spacing.x
+                    };
+                    let text_w = (ui.available_width() - chip_w).max(0.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(text_w, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(text_w);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(title).size(16.0).strong())
+                                    .wrap(),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(desc)
+                                        .small()
+                                        .color(theme::subtle_text()),
+                                )
+                                .wrap(),
+                            );
+                        },
+                    );
+                    if !compact {
                         status_chip(ui, t, status);
-                    });
+                    }
                 });
+                if compact {
+                    status_chip(ui, t, status);
+                }
+                ui.set_min_width(width);
             });
         })
         .response
@@ -4090,6 +4374,160 @@ fn category_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appearance_menu_opens_at_high_zoom_in_a_small_window() {
+        for lang in [Lang::En, Lang::PtBr] {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut app = DashboardApp::from_root(&ctx, None);
+            app.lang = lang;
+            app.startup_error = None;
+            app.reboot = RebootFlags::default();
+            let mut button_pos = None;
+            let mut menu_visible = false;
+            for pass in 0..6 {
+                let mut input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(240.0, 180.0),
+                    )),
+                    ..Default::default()
+                };
+                if pass == 3 || pass == 4 {
+                    let pos = button_pos.expect("Appearance menu button must be visible");
+                    input.events = vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: pass == 3,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ];
+                }
+                let output = ctx.run(input, |ctx| app.draw(ctx));
+                for clipped in output.shapes {
+                    if let egui::epaint::Shape::Text(text) = clipped.shape {
+                        if text.galley.text() == app.tr().appearance_label {
+                            button_pos = Some(text.visual_bounding_rect().center());
+                        }
+                        if text.galley.text() == app.tr().language_label {
+                            menu_visible = true;
+                            assert!(text.visual_bounding_rect().right() <= 240.0);
+                        }
+                    }
+                }
+            }
+            assert!(menu_visible, "Appearance menu did not open for {lang:?}");
+        }
+    }
+
+    #[test]
+    fn layouts_fit_small_windows_high_zoom_and_both_languages() {
+        // Render the real pages without a native window, engine or filesystem writes.
+        // Width/height are usable pixels divided by display DPI and UI zoom.
+        for lang in [Lang::En, Lang::PtBr] {
+            for (width, height, scale) in [
+                (480.0, 360.0, 2.0),
+                (820.0, 560.0, 1.5),
+                (1366.0, 768.0, 1.25),
+                (1920.0, 1080.0, 2.0),
+                (3840.0, 2160.0, 1.5),
+            ] {
+                for page in [
+                    Page::Update,
+                    Page::Install,
+                    Page::NewPc,
+                    Page::Optimize,
+                    Page::Tools,
+                    Page::System,
+                    Page::Advanced,
+                ] {
+                    let ctx = egui::Context::default();
+                    theme::apply(&ctx);
+                    let mut app = DashboardApp::from_root(&ctx, None);
+                    app.lang = lang;
+                    app.page = page;
+                    app.startup_error = None;
+                    app.reboot = RebootFlags::default();
+                    app.tasks_fetched = true;
+                    app.services_fetched = true;
+                    app.autostart_fetched = true;
+                    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+                    app.bundle_apps = load_bundle(repo, None).unwrap();
+                    app.presets = discover_presets(&repo.join("presets"));
+                    let mut texture_updates = Vec::new();
+                    let snapshot_dir = std::env::var_os("UPKEEP_LAYOUT_SNAPSHOTS");
+                    let snapshot = snapshot_dir.is_some()
+                        && lang == Lang::PtBr
+                        && (width == 820.0 || width == 1920.0)
+                        && matches!(page, Page::Update | Page::Install | Page::Optimize);
+                    for pass in 0..6 {
+                        let input = egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width / scale, height / scale),
+                            )),
+                            events: if pass >= 3 {
+                                vec![
+                                    egui::Event::PointerMoved(egui::pos2(
+                                        100.0,
+                                        height / scale - 50.0,
+                                    )),
+                                    egui::Event::MouseWheel {
+                                        unit: egui::MouseWheelUnit::Point,
+                                        delta: egui::vec2(0.0, -500.0),
+                                        modifiers: egui::Modifiers::NONE,
+                                    },
+                                ]
+                            } else {
+                                Vec::new()
+                            },
+                            ..Default::default()
+                        };
+                        let output = ctx.run(input, |ctx| app.draw(ctx));
+                        if snapshot {
+                            for (_, delta) in &output.textures_delta.set {
+                                let egui::ImageData::Color(image) = &delta.image;
+                                texture_updates.push(serde_json::json!({"pos": delta.pos, "size": image.size,
+                                    "pixels": image.pixels.iter().map(|c| c.to_array()).collect::<Vec<_>>() }));
+                            }
+                            if pass == 2 {
+                                let meshes: Vec<_> = ctx.tessellate(output.shapes.clone(), output.pixels_per_point)
+                                    .into_iter().filter_map(|p| match p.primitive {
+                                        egui::epaint::Primitive::Mesh(m) => Some(serde_json::json!({
+                                            "clip": [p.clip_rect.min.x, p.clip_rect.min.y, p.clip_rect.max.x, p.clip_rect.max.y],
+                                            "vertices": m.vertices.iter().map(|v| (v.pos.x, v.pos.y, v.uv.x, v.uv.y, v.color.to_array())).collect::<Vec<_>>(),
+                                            "indices": m.indices
+                                        })), _ => None
+                                    }).collect();
+                                let dir = PathBuf::from(snapshot_dir.as_ref().unwrap());
+                                std::fs::create_dir_all(&dir).unwrap();
+                                std::fs::write(dir.join(format!("{page:?}-{width}.json")), serde_json::to_vec(&serde_json::json!({
+                                    "width": width, "height": height, "scale": scale, "textures": texture_updates, "meshes": meshes
+                                })).unwrap()).unwrap();
+                            }
+                        }
+
+                        // Data pages intentionally scroll horizontally. Other pages
+                        // must wrap their text, rather than silently clipping it.
+                        if !matches!(page, Page::System | Page::Advanced) {
+                            for clipped in &output.shapes {
+                                if let egui::epaint::Shape::Text(text) = &clipped.shape {
+                                    let bounds = text.visual_bounding_rect();
+                                    if bounds.intersects(clipped.clip_rect) {
+                                        assert!(bounds.right() <= clipped.clip_rect.right() + 2.0,
+                                            "{lang:?} {page:?} {width}x{height}/{scale}: text clipped: {:?}, bounds={bounds:?}, clip={:?}", text.galley.text(), clipped.clip_rect);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn milestones_are_monotonic_and_end_at_100() {

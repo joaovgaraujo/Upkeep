@@ -18,7 +18,8 @@ fn window_icon() -> egui::IconData {
 fn run(renderer: eframe::Renderer) -> eframe::Result<()> {
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1080.0, 720.0])
-        .with_min_inner_size([820.0, 560.0])
+        .with_min_inner_size([480.0, 360.0])
+        .with_clamp_size_to_monitor_size(true)
         .with_title("Upkeep")
         .with_icon(window_icon());
 
@@ -59,7 +60,11 @@ fn show_startup_error(err: &eframe::Error) {
     }
     const MB_ICONERROR: u32 = 0x10;
 
-    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let wide = |s: &str| {
+        s.encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<u16>>()
+    };
     let text = wide(&format!(
         "Upkeep could not start.\n\n{err}\n\n\
          If this mentions OpenGL, wgpu or an adapter, install the graphics \
@@ -68,7 +73,12 @@ fn show_startup_error(err: &eframe::Error) {
     let caption = wide("Upkeep");
     // SAFETY: both buffers are NUL-terminated UTF-16 and outlive the call.
     unsafe {
-        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), MB_ICONERROR);
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            caption.as_ptr(),
+            MB_ICONERROR,
+        );
     }
 }
 

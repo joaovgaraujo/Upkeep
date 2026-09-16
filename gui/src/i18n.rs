@@ -30,8 +30,14 @@ impl Lang {
     /// Parses a `settings.json` "Language" value ("en" / "pt-BR"), defaulting
     /// to English for anything unrecognized.
     pub fn from_code(code: &str) -> Self {
-        match code {
-            "pt-BR" | "pt-br" | "pt_BR" | "pt" => Lang::PtBr,
+        match code
+            .trim()
+            .replace('_', "-")
+            .to_ascii_lowercase()
+            .split('-')
+            .next()
+        {
+            Some("pt") => Lang::PtBr,
             _ => Lang::En,
         }
     }
@@ -41,6 +47,41 @@ impl Lang {
             Lang::En => "en",
             Lang::PtBr => "pt-BR",
         }
+    }
+}
+
+/// Resolve an explicit preference or the current user's Windows UI language.
+/// Use the display language, not the keyboard layout or regional date format.
+pub fn resolve_language(preference: &str) -> Lang {
+    if preference.is_empty() || preference.eq_ignore_ascii_case("system") {
+        system_language()
+    } else {
+        Lang::from_code(preference)
+    }
+}
+
+fn language_from_windows_id(id: u16) -> Lang {
+    // PRIMARYLANGID: all Portuguese regional variants use our pt-BR strings.
+    if id & 0x03ff == 0x16 {
+        Lang::PtBr
+    } else {
+        Lang::En
+    }
+}
+
+pub fn system_language() -> Lang {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetUserDefaultUILanguage() -> u16;
+        }
+        // SAFETY: this parameterless Windows query has no memory preconditions.
+        language_from_windows_id(unsafe { GetUserDefaultUILanguage() })
+    }
+    #[cfg(not(windows))]
+    {
+        Lang::En
     }
 }
 
@@ -135,6 +176,10 @@ pub struct Strings {
     pub reboot_windows_update: &'static str,
     pub reboot_pending_file_rename: &'static str,
     pub language_label: &'static str,
+    pub language_system: &'static str,
+    pub appearance_label: &'static str,
+    pub navigation_label: &'static str,
+    pub reset_text_size: &'static str,
     pub language_en: &'static str,
     pub language_pt_br: &'static str,
     pub theme_label: &'static str,
@@ -351,17 +396,17 @@ pub static EN: Strings = Strings {
     setup_console_note: "A PowerShell window will open showing progress. You can keep using the PC meanwhile.",
     setup_details_header: "Review & choose each change",
     setup_restore_title: "Safety net (restore point)",
-    setup_restore_desc: "Creates a System Restore point first, so everything below can be undone from Windows recovery.",
+    setup_restore_desc: "Creates a Windows restore point. Registry toggles also get a separate backup. Keep a personal file backup; System Restore cannot undo every installer.",
     setup_tweaks_title: "Privacy & cleanup tweaks",
-    setup_tweaks_desc: "Applies the recommended Windows tweaks and removes pre-installed junk apps. Open the list below to pick them one by one (shared with the Optimize page).",
+    setup_tweaks_desc: "Starts with a small set of Windows preferences. App removal, service changes and other advanced tweaks are optional. Review the selection below.",
     setup_toggles_title: "Nice defaults",
-    setup_toggles_desc: "Dark theme, visible file extensions, mouse acceleration off, Num Lock on at startup and more. Open the list below to pick them one by one.",
+    setup_toggles_desc: "Shows file extensions and enables long paths by default. Appearance and accessibility changes are optional. Previous registry values are saved before changes.",
     setup_drivers_title: "Drivers",
     setup_drivers_desc: "SDIO finds and installs missing drivers automatically (it may download driver packs first, which can take a while). With an NVIDIA card and a prepared NVCleanstall package, that is used for the graphics driver: clean install, no telemetry, no restart.",
     setup_oosu_title: "O&O ShutUp10++ (privacy)",
     setup_oosu_desc: "A well-known free privacy tool that turns off dozens of Windows data-collection switches in one go. Automatic applies O&O's own 'Recommended' settings silently; Manual opens the program so you pick yourself.",
     setup_apps_title: "Essential apps",
-    setup_apps_desc: "Installs the Essentials pack: browser, video player, PDF reader, archiver and more. Pick different apps on the Install Apps page instead if you prefer.",
+    setup_apps_desc: "Installs six essentials. Prepares WinGet and Chocolatey, skips installed apps, and saves failures for retry. Choose extra apps on Install Apps.",
 
     optimize_title: "Optimize Windows",
     optimize_subtitle: "Recommended tweaks, each explained in plain language. A restore point is created first, so everything can be undone. Items marked \u{26A0} have a real trade-off. Read them before applying.",
@@ -392,6 +437,10 @@ pub static EN: Strings = Strings {
     reboot_windows_update: "Windows Update",
     reboot_pending_file_rename: "PendingFileRename",
     language_label: "Language / Idioma",
+    language_system: "Follow Windows",
+    appearance_label: "Appearance & language",
+    navigation_label: "Go to",
+    reset_text_size: "Use Windows text size",
     language_en: "English",
     language_pt_br: "Portugu\u{ea}s (BR)",
 
@@ -596,17 +645,17 @@ pub static PT_BR: Strings = Strings {
     setup_console_note: "Uma janela do PowerShell vai abrir mostrando o progresso. Voc\u{ea} pode continuar usando o PC normalmente enquanto isso.",
     setup_details_header: "Ver e escolher cada mudan\u{e7}a",
     setup_restore_title: "Ponto de restaura\u{e7}\u{e3}o (rede de seguran\u{e7}a)",
-    setup_restore_desc: "Antes de qualquer mudan\u{e7}a, cria um ponto de Restaura\u{e7}\u{e3}o do Sistema. Se algo der errado, d\u{e1} para voltar atr\u{e1}s pela recupera\u{e7}\u{e3}o do Windows.",
+    setup_restore_desc: "Cria um ponto de restauração e salva os valores anteriores dos ajustes de registro. Mantenha um backup pessoal; nem todo instalador pode ser desfeito.",
     setup_tweaks_title: "Privacidade e limpeza",
-    setup_tweaks_desc: "Aplica os ajustes recomendados do Windows e remove apps pr\u{e9}-instalados in\u{fa}teis. Abra a lista abaixo para escolher item por item (a sele\u{e7}\u{e3}o \u{e9} a mesma da p\u{e1}gina Otimizar).",
+    setup_tweaks_desc: "Começa com poucos ajustes do Windows. Remoção de apps, alterações de serviços e outros ajustes avançados são opcionais. Confira a seleção abaixo.",
     setup_toggles_title: "Prefer\u{ea}ncias recomendadas",
-    setup_toggles_desc: "Tema escuro, extens\u{f5}es de arquivo vis\u{ed}veis, acelera\u{e7}\u{e3}o do mouse desligada, Num Lock ativado ao iniciar e mais. Abra a lista abaixo para escolher item por item.",
+    setup_toggles_desc: "Mostra extensões de arquivo e ativa caminhos longos por padrão. Aparência e acessibilidade são opcionais. Os valores anteriores do registro são salvos.",
     setup_drivers_title: "Drivers",
     setup_drivers_desc: "O SDIO encontra e instala automaticamente os drivers que faltam (antes disso, pode baixar pacotes de drivers, o que pode demorar). Se houver placa NVIDIA e um pacote do NVCleanstall preparado, ele \u{e9} usado para o driver de v\u{ed}deo: instala\u{e7}\u{e3}o limpa, sem telemetria e sem reiniciar.",
     setup_oosu_title: "O&O ShutUp10++ (privacidade)",
     setup_oosu_desc: "Ferramenta de privacidade gratuita e conhecida que desliga dezenas de op\u{e7}\u{f5}es de coleta de dados do Windows de uma vez. No autom\u{e1}tico, as configura\u{e7}\u{f5}es 'recomendadas' da pr\u{f3}pria O&O s\u{e3}o aplicadas em sil\u{ea}ncio; no manual, o programa abre para voc\u{ea} escolher.",
     setup_apps_title: "Apps essenciais",
-    setup_apps_desc: "Instala o pacote Essenciais: navegador, player de v\u{ed}deo, leitor de PDF, compactador e mais. Prefere outros apps? Escolha na p\u{e1}gina Instalar Apps.",
+    setup_apps_desc: "Instala seis apps essenciais. Prepara WinGet e Chocolatey, pula apps instalados e salva falhas para tentar novamente. Escolha extras em Instalar Apps.",
 
     optimize_title: "Otimizar o Windows",
     optimize_subtitle: "Ajustes recomendados, cada um explicado em linguagem simples. Um ponto de restaura\u{e7}\u{e3}o \u{e9} criado antes de tudo, ent\u{e3}o d\u{e1} para desfazer qualquer coisa. Itens marcados com \u{26A0} t\u{ea}m um efeito colateral real. Leia antes de aplicar.",
@@ -637,6 +686,10 @@ pub static PT_BR: Strings = Strings {
     reboot_windows_update: "Windows Update",
     reboot_pending_file_rename: "PendingFileRename",
     language_label: "Language / Idioma",
+    language_system: "Seguir o Windows",
+    appearance_label: "Aparência e idioma",
+    navigation_label: "Ir para",
+    reset_text_size: "Usar tamanho de texto do Windows",
     language_en: "English",
     language_pt_br: "Portugu\u{ea}s (BR)",
 
@@ -951,12 +1004,10 @@ pub fn runs_at_signin(lang: Lang, exe: &str) -> String {
 /// Localized "N protected items hidden" note for the System tables.
 pub fn hidden_items(lang: Lang, n: usize) -> String {
     match lang {
-        Lang::En => format!(
-            "{n} protected item(s) hidden. Tick 'Advanced' to show them."
-        ),
-        Lang::PtBr => format!(
-            "{n} item(ns) protegido(s) oculto(s). Marque 'Avan\u{e7}ado' para exibir."
-        ),
+        Lang::En => format!("{n} protected item(s) hidden. Tick 'Advanced' to show them."),
+        Lang::PtBr => {
+            format!("{n} item(ns) protegido(s) oculto(s). Marque 'Avan\u{e7}ado' para exibir.")
+        }
     }
 }
 
@@ -993,6 +1044,18 @@ pub fn preset_display(lang: Lang, slug: &str) -> (&'static str, &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_display_language_and_explicit_overrides() {
+        assert_eq!(language_from_windows_id(0x0416), Lang::PtBr);
+        assert_eq!(language_from_windows_id(0x0816), Lang::PtBr);
+        assert_eq!(language_from_windows_id(0x0409), Lang::En);
+        assert_eq!(language_from_windows_id(0x040c), Lang::En);
+        assert_eq!(Lang::from_code("PT_pt"), Lang::PtBr);
+        assert_eq!(resolve_language("system"), system_language());
+        assert_eq!(resolve_language("en"), Lang::En);
+        assert_eq!(resolve_language("pt-BR"), Lang::PtBr);
+    }
 
     #[test]
     fn from_code_recognizes_pt_br_variants_and_defaults_to_en() {

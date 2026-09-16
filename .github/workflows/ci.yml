@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, archive-full-history]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the compiler (1.97.1), so rustup installs that
+      # exact version on the first cargo call. No toolchain input needed here.
+      - name: Show toolchain
+        run: rustc --version && cargo --version
+        working-directory: gui
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui
+
+      - name: Check formatting
+        run: cargo fmt --check
+        working-directory: gui
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: gui
+
+      - name: Test
+        run: cargo test
+        working-directory: gui
+
+      - name: Test update orchestration without running real updaters
+        shell: powershell
+        run: |
+          Install-Module Pester -RequiredVersion 5.7.1 -Force -Scope CurrentUser -SkipPublisherCheck
+          Import-Module Pester -RequiredVersion 5.7.1
+          Invoke-Pester -Path ./tests -CI
+
+      - name: Build release
+        run: cargo build --release
+        working-directory: gui
+
+      # Guards the build.rs contract: the version resource must not contain a
+      # UAC installer-detection trigger word, or the unmanifested test harness
+      # demands elevation and every future CI run dies with os error 740.
+      - name: Verify version resource
+        shell: pwsh
+        run: |
+          $vi = (Get-Item gui\target\release\Upkeep.exe).VersionInfo
+          $fields = 'CompanyName','FileDescription','ProductName','OriginalFilename','InternalName'
+          foreach ($f in $fields) {
+            $v = $vi.$f
+            if ([string]::IsNullOrWhiteSpace($v)) { throw "Version resource field '$f' is empty" }
+            if ($v -match '(?i)\b(install|setup|update|patch)') {
+              throw "Version resource field '$f' contains a UAC trigger word: $v"
+            }
+            Write-Host "  $f = $v"
+          }

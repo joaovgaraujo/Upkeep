@@ -185,33 +185,14 @@ rem    twice at logon.
 echo [discord] Disabling Discord run-at-startup...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Disable-DiscordAutostart.ps1"
 
-rem -- Detect EA app BEFORE the run ----------------------------------------
-rem    The EA app updater sometimes uninstalls the client entirely. Record
-rem    whether it was installed so we can reinstall it afterwards if it
-rem    vanishes during the update.
-set "EA_LAUNCHER=%ProgramFiles%\Electronic Arts\EA Desktop\EA Desktop\EALauncher.exe"
-set "EA_DESKTOP=%ProgramFiles%\Electronic Arts\EA Desktop\EA Desktop\EADesktop.exe"
-set "EA_WAS_INSTALLED=0"
-if exist "%EA_LAUNCHER%" set "EA_WAS_INSTALLED=1"
-if exist "%EA_DESKTOP%" set "EA_WAS_INSTALLED=1"
-if "%EA_WAS_INSTALLED%"=="1" (
-    echo [ea] EA app detected - will verify it survives the update.
-) else (
-    echo [ea] EA app not installed - no reinstall guard needed.
-)
-
-rem -- Microsoft Store app updates ------------------------------------------
-rem    Topgrade's winget msstore handling is unreliable, and a plain
-rem    "winget upgrade --source msstore" often does nothing. The dependable
-rem    path is steps\Update-StoreApps.ps1: it fires the MDM UpdateScanMethod
-rem    AND drives per-app updates through the WinRT AppInstallManager, which
-rem    gives a real progress/completion signal instead of fire-and-forget.
-set "STORE_STATUS=skipped"
-if not "%DASHBOARD_SKIP_STORE%"=="1" (
-echo [store] Updating Microsoft Store apps...
-set "STORE_STATUS=ok"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-StoreApps.ps1"
-if "!errorLevel!"=="2" (set "STORE_STATUS=skipped") else if not "!errorLevel!"=="0" set "STORE_STATUS=error"
+rem -- Reboot safety: enforce outside the editable preference pin section.
+if not "%DASHBOARD_SKIP_APPS%"=="1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Set-UpdateSafety.ps1"
+    if errorlevel 1 (
+        echo [error] Could not enforce reboot safety. Updates stopped.
+        rmdir "%LOCKDIR%" 2>nul
+        exit /b 1
+    )
 )
 
 rem -- Write topgrade config (dedicated file, overwritten each run) ---------
@@ -244,13 +225,13 @@ echo [setup] Writing topgrade config...
     rem sequentially, with no way to filter which ones. On a machine with many
     rem multi-GB models this can run for a very long time and looks like a
     rem hang. Update ollama models manually when you want to: ollama pull <model>
-    rem microsoft_store is disabled: we already trigger Store updates above
-    rem via the reliable CIM UpdateScanMethod, so topgrade probing it too is
-    rem redundant.
-    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store"]
+    rem Store and Windows servicing have their own steps below. Disable
+    rem both here to avoid duplicate work and honor the category skip flags.
+    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system"]
     echo.
     echo [windows]
     echo accept_all_updates = true
+    echo updates_auto_reboot = "no"
 )
 echo [setup] Config written to %TGCONF%
 
@@ -279,19 +260,10 @@ rem    the bounded -update pass).
 rem    They start minimized / to tray and are pushed back down if they pop a
 rem    window anyway - see steps\Start-Launchers.ps1.
 if not "%DASHBOARD_SKIP_APPS%"=="1" (
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Start-Launchers.ps1" -Only EA,Epic
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Start-Launchers.ps1" -Only Epic
 rem There is no summary row for launchers, so surface a failure as a [warn]
 rem line - the dashboard colours those amber - rather than dropping it.
 if not "!errorLevel!"=="0" echo [warn] Some game clients could not be started - see the [launch] lines above.
-)
-
-rem -- JDownloader 2 self-update (bounded, headless) -------------------------
-set "JD_STATUS=skipped"
-if not "%DASHBOARD_SKIP_APPS%"=="1" (
-echo [jdownloader] Updating JDownloader 2...
-set "JD_STATUS=ok"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-JDownloader.ps1"
-if "!errorLevel!"=="2" (set "JD_STATUS=skipped") else if not "!errorLevel!"=="0" set "JD_STATUS=error"
 )
 
 rem -- Winget upgrades (handled here, not topgrade, so we can pass
@@ -402,7 +374,7 @@ rem    Start-Job child process, which is where the import actually happens.
 rem    Note the install at the top of this script already passes Bypass --
 rem    that is why the module installs fine but never loads.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$job = Start-Job -ScriptBlock { Import-Module PSWindowsUpdate -ErrorAction Stop; Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -Verbose 2>&1 | Out-String };" ^
+  "$job = Start-Job -ScriptBlock { Import-Module PSWindowsUpdate -ErrorAction Stop; Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop -Verbose 2>&1 | Out-String };" ^
   "$done = Wait-Job $job -Timeout (%WU_TIMEOUT_MIN% * 60);" ^
   "$code = 0;" ^
   "if (-not $done) { Write-Host ('[timeout] Windows Update exceeded {0} minutes - moving on.' -f %WU_TIMEOUT_MIN%); $code = 1 } else { Receive-Job $job -ErrorAction SilentlyContinue | Write-Host; if ($job.State -eq 'Failed') { $code = 1; foreach ($cj in $job.ChildJobs) { foreach ($e in $cj.Error) { Write-Host ('[error] ' + $e.Exception.Message) }; if ($cj.JobStateInfo.Reason) { Write-Host ('[error] ' + $cj.JobStateInfo.Reason.Message) } }; Write-Host '[warn] Windows Update job failed - see the [error] lines above.' } };" ^
@@ -411,41 +383,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 if "!errorLevel!"=="2" (set "WU_STATUS=skipped") else if not "!errorLevel!"=="0" set "WU_STATUS=error"
 )
 
-rem -- EA app guard: reinstall if the update removed it ---------------------
-rem    Each check is its own line so %EA_STILL% expands correctly without
-rem    needing delayed expansion.
-set "EA_STATUS=n/a"
-if "%EA_WAS_INSTALLED%"=="1" set "EA_STILL=0"
-if "%EA_WAS_INSTALLED%"=="1" if exist "%EA_LAUNCHER%" set "EA_STILL=1"
-if "%EA_WAS_INSTALLED%"=="1" if exist "%EA_DESKTOP%"  set "EA_STILL=1"
-if "%EA_WAS_INSTALLED%"=="1" if "%EA_STILL%"=="1" echo [ea] EA app still present after update. OK.
-if "%EA_WAS_INSTALLED%"=="1" if "%EA_STILL%"=="1" set "EA_STATUS=ok"
-if "%EA_WAS_INSTALLED%"=="1" if "%EA_STILL%"=="0" (
-    echo.
-    echo [ea] EA app was removed during the update - reinstalling...
-    winget install --id ElectronicArts.EADesktop -e --accept-source-agreements --accept-package-agreements --silent
-    if errorlevel 1 (
-        echo [ea] Automatic reinstall failed. Get it from https://www.ea.com/ea-app
-        set "EA_STATUS=reinstall failed"
-    ) else (
-        echo [ea] EA app reinstalled.
-        set "EA_STATUS=reinstalled"
-    )
-)
-
-rem -- Steam game updates (unattended) ---------------------------------------
-rem    Closes Steam, flags every installed game for an update check, relaunches
-rem    steam.exe -silent and waits (registry Updating flags + downloading dir,
-rem    debounced). If the time budget runs out, downloads simply continue in
-rem    the background - nothing is killed. Skip with DASHBOARD_SKIP_STEAM=1.
-set "STEAM_TIMEOUT_MIN=60"
-set "STEAM_STATUS=skipped"
-if not "%DASHBOARD_SKIP_STEAM%"=="1" (
-echo [steam] Updating Steam games...
-set "STEAM_STATUS=ok"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-SteamGames.ps1" -TimeoutMin %STEAM_TIMEOUT_MIN%
-if "!errorLevel!"=="2" (set "STEAM_STATUS=skipped") else if not "!errorLevel!"=="0" set "STEAM_STATUS=error"
-)
+rem -- Independent clients: package installers and servicing have finished.
+set "EA_STATUS=skipped"
+set "STORE_STATUS=error"
+set "JD_STATUS=error"
+set "STEAM_STATUS=error"
+set "CLIENT_RESULTS=%TGDIR%\client-results.txt"
+del "%CLIENT_RESULTS%" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-ClientUpdates.ps1" -ResultFile "%CLIENT_RESULTS%" -LogFile "%LOGFILE%"
+if exist "%CLIENT_RESULTS%" for /f "usebackq tokens=1,2 delims==" %%A in ("%CLIENT_RESULTS%") do set "%%A=%%B"
 
 rem -- Launch Discord and Battle.net (after updates) ------------------------
 rem    Steam is deliberately absent here: the Steam step above already
@@ -468,12 +414,8 @@ rem -- Summary --------------------------------------------------------------
 if "%DASHBOARD_SKIP_APPS%"=="1" (
     set "TOPGRADE_STATUS=skipped"
 ) else (
-    rem topgrade exits nonzero if ANY of its ~30 steps failed, and a single
-    rem flaky one (a pnpm PATH warning, a transient registry fetch) is not a
-    rem failed update run. Report it honestly but keep it in the "ok" family
-    rem so the dashboard doesn't paint the whole category red - the per-step
-    rem detail is in the log either way.
-    if !RC! equ 0 (set "TOPGRADE_STATUS=ok") else (set "TOPGRADE_STATUS=ok - some steps failed, see log (exit !RC!^)")
+    rem Failures must remain visible in the category and process exit status.
+    if !RC! equ 0 (set "TOPGRADE_STATUS=ok") else (set "TOPGRADE_STATUS=error - see log, exit !RC!")
 )
 for /f "delims=" %%I in ('powershell -NoProfile -Command "$s=Get-Date '%RUN_START%'; ((Get-Date)-$s).ToString('hh\:mm\:ss')"') do set "RUN_DURATION=%%I"
 
@@ -591,13 +533,12 @@ if "%INTERACTIVE%"=="1" (
     echo This window will close in 60 seconds (press a key to close now^)...
     timeout /t 60 >nul
 )
-rem Reaching here means every phase ran and the summary was printed, so the
-rem ENGINE succeeded even if an individual step didn't. Per-step outcomes are
-rem already in the summary block the dashboard parses; hard failures (no
-rem winget/choco, lock held, elevation declined) exited nonzero much earlier.
-rem Do NOT change this back to `exit /b %RC%`: RC is topgrade's status, and
-rem one flaky package would mark the whole run failed.
-exit /b 0
+rem Return failure when a selected step failed; the summary keeps the details.
+set "FINAL_RC=0"
+for %%S in ("%WINGET_STATUS%" "%TOPGRADE_STATUS%" "%WU_STATUS%" "%STORE_STATUS%" "%JD_STATUS%" "%STEAM_STATUS%") do (
+    for /f "tokens=1" %%E in ("%%~S") do if /i "%%E"=="error" set "FINAL_RC=1"
+)
+exit /b %FINAL_RC%
 
 rem ============================================================
 rem  README - notes for future you
@@ -628,8 +569,8 @@ rem    (requires topgrade installed on each remote)
 rem
 rem  EA app guard:
 rem    The EA app updater occasionally uninstalls the client. This script
-rem    records whether it was installed before the run and reinstalls it
-rem    (winget id ElectronicArts.EADesktop) if it disappears.
+rem    blocks EA upgrades in both package managers and leaves repairs manual.
+rem    EAappInstaller has been observed initiating unsolicited restarts.
 rem
 rem  Microsoft Store apps:
 rem    Triggered via the MDM UpdateScanMethod (reliable) plus a best-effort

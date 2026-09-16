@@ -197,9 +197,7 @@ fn run_powershell(script: &str, timeout: Duration) -> Result<String, String> {
     // descriptions and any path under `C:\Usuários\...` came back as U+FFFD
     // replacement characters. This is the same thing `chcp 65001` does at the
     // top of SystemUpdate_Topgrade.bat.
-    let script = format!(
-        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; {script}"
-    );
+    let script = format!("[Console]::OutputEncoding = [Text.Encoding]::UTF8; {script}");
     run_hidden(
         "powershell.exe",
         &["-NoProfile", "-NonInteractive", "-Command", &script],
@@ -217,7 +215,11 @@ pub fn query_installed(timeout: Duration) -> Vec<InstalledApp> {
     let mut out = Vec::new();
     if let Ok(text) = run_hidden(
         "winget",
-        &["list", "--accept-source-agreements", "--disable-interactivity"],
+        &[
+            "list",
+            "--accept-source-agreements",
+            "--disable-interactivity",
+        ],
         timeout,
     ) {
         out.extend(parse_winget_list(&text));
@@ -571,10 +573,7 @@ pub fn exe_name(command: &str) -> String {
         // there is no recognizable executable extension.
         exe_prefix(trimmed).unwrap_or_else(|| trimmed.split_whitespace().next().unwrap_or(""))
     };
-    path.rsplit(['\\', '/'])
-        .next()
-        .unwrap_or("")
-        .to_string()
+    path.rsplit(['\\', '/']).next().unwrap_or("").to_string()
 }
 
 /// The leading path of an unquoted command line, up to and including the
@@ -771,7 +770,10 @@ Truncated Name that is lo\u{2026} Some.Id                  1.0                  
         map.insert("clipboard user service".to_string(), 0.1_f64);
         map.insert("tailscale".to_string(), 1.1_f64);
         assert_eq!(boot_time_for(&map, "Tailscale"), Some(1.1));
-        assert_eq!(boot_time_for(&map, "Clipboard User Service_223a20"), Some(0.1));
+        assert_eq!(
+            boot_time_for(&map, "Clipboard User Service_223a20"),
+            Some(0.1)
+        );
         assert_eq!(boot_time_for(&map, "Unknown Thing"), None);
     }
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     One-shot basic setup for a fresh Windows installation: restore point,
     curated winutil tweaks + junk-app removal, quality-of-life registry
@@ -7,7 +7,7 @@
 
 .DESCRIPTION
     Orchestrates the phases below in order. Each phase can be skipped, and
-    every change is preceded by a System Restore point so it can be undone.
+    records results and backups. Restart continuation requires user approval.
 
       1. Restore point   (safety net)
       2. Windows tweaks  (winutil -Config presets\winutil-newpc.json, headless)
@@ -46,10 +46,13 @@ param(
     [switch]$SkipRestorePoint,
     [switch]$SkipTweaks,
     [switch]$SkipDrivers,
+    [switch]$InstallDrivers,
     [switch]$SkipApps,
+    [switch]$NoToggles,
+    [switch]$NoRebootPrompt,
 
     [Parameter()]
-    [string[]]$Toggles = @('dark-theme', 'file-extensions', 'hidden-files', 'mouse-accel-off', 'num-lock', 'sticky-keys-off', 'verbose-bsod', 'long-paths'),
+    [string[]]$Toggles = @('file-extensions', 'long-paths'),
 
     # O&O ShutUp10++. Mode 'auto' (default) applies a config silently with
     # /quiet: your exported config (settings.json key OOSUConfigPath) if set,
@@ -68,7 +71,7 @@ param(
     [string]$WinutilConfig,
 
     # Run even when Windows reports a pending restart. By default the script
-    # schedules itself to resume at next logon and stops instead: servicing
+    # defers servicing until a manual restart and rerun: servicing
     # (DISM) calls made by winutil tweaks queue forever until that restart.
     [switch]$IgnorePendingReboot,
 
@@ -80,6 +83,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+if (-not $InstallDrivers) { $SkipDrivers = $true }
+if ($NoToggles) { $Toggles = @() }
 
 # $PSScriptRoot is not reliably populated during param default evaluation in
 # Windows PowerShell 5.1, so resolve path defaults in the body (see
@@ -111,9 +117,11 @@ function Get-RelaunchArgs {
     if ($SkipRestorePoint)    { $argList += '-SkipRestorePoint' }
     if ($SkipTweaks)          { $argList += '-SkipTweaks' }
     if ($SkipDrivers)         { $argList += '-SkipDrivers' }
+    if ($InstallDrivers)      { $argList += '-InstallDrivers' }
     if ($SkipApps)            { $argList += '-SkipApps' }
+    if ($NoRebootPrompt)      { $argList += '-NoRebootPrompt' }
     if ($Oosu)                { $argList += @('-Oosu', '-OosuMode', $OosuMode) }
-    $argList += @('-Toggles', "`"$($Toggles -join ',')`"")
+    if ($Toggles.Count) { $argList += @('-Toggles', "`"$($Toggles -join ',')`"") } else { $argList += '-NoToggles' }
     if ($AppsPreset)          { $argList += @('-AppsPreset', "`"$AppsPreset`"") }
     if ($WinutilConfig)       { $argList += @('-WinutilConfig', "`"$WinutilConfig`"") }
     if ($IgnorePendingReboot) { $argList += '-IgnorePendingReboot' }
@@ -166,11 +174,109 @@ function Get-SettingString {
 # ---------------------------------------------------------------------------
 # Phase result tracking
 # ---------------------------------------------------------------------------
+$reportDir = Join-Path $env:LOCALAPPDATA ('Upkeep\Reports\setup-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+Write-Output "Setup reports and backups: $reportDir"
+try { Start-Transcript -Path (Join-Path $reportDir 'setup.log') -ErrorAction Stop | Out-Null } catch { Write-Warning "Transcript unavailable: $_" }
+$registryBackup = New-Object System.Collections.Generic.List[object]
+$deferredIds = @()
+$setupAppReport = Join-Path $reportDir 'apps.json'
 $phaseResults = New-Object System.Collections.Generic.List[object]
 
 function Add-PhaseResult {
     param([string]$Phase, [string]$Status, [string]$Detail = '')
     $phaseResults.Add([pscustomobject]@{ Phase = $Phase; Status = $Status; Detail = $Detail })
+    ConvertTo-Json -InputObject @($phaseResults.ToArray()) -Depth 6 | Set-Content -LiteralPath (Join-Path $reportDir 'results.json') -Encoding UTF8
+}
+
+<#
+.SYNOPSIS
+    Removes duplicate entries from the hosts file, keeping the first of each.
+
+.DESCRIPTION
+    Only ever DELETES lines that are an exact repeat of an earlier mapping, so
+    the surviving file resolves identically to the one it replaces -- the
+    resolver already used the first match, and that is the one kept.
+
+    Comment lines and blank lines are passed through untouched, so section
+    markers and hand-written notes survive. Comparison is on the normalized
+    "<ip> <host>" pair (case-insensitive, whitespace collapsed) rather than the
+    raw line, so the same mapping written with different spacing still counts
+    as a duplicate. A trailing comment makes a line distinct and it is kept:
+    dropping it could lose the only note explaining why an entry exists.
+
+    A copy of the original is written next to the file before anything changes.
+#>
+function Repair-HostsFile {
+    $hosts = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+    if (-not (Test-Path -LiteralPath $hosts)) { return }
+
+    try {
+        $lines = @(Get-Content -LiteralPath $hosts -ErrorAction Stop)
+    } catch {
+        Write-Output "[hosts] WARNING: could not read the hosts file: $($_.Exception.Message)"
+        return
+    }
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $kept = New-Object System.Collections.Generic.List[string]
+    $removed = 0
+
+    foreach ($line in $lines) {
+        # Comments, blanks and anything that isn't a plain "<ip> <host...>"
+        # mapping pass through untouched.
+        if ($line -match '^\s*(#|$)') { $kept.Add($line); continue }
+        if ($line -match '#') { $kept.Add($line); continue }
+
+        $key = ($line.Trim() -replace '\s+', ' ')
+        if ($key -notmatch '^\S+\s+\S+') { $kept.Add($line); continue }
+
+        if ($seen.Add($key)) { $kept.Add($line) } else { $removed++ }
+    }
+
+    if ($removed -eq 0) {
+        Write-Output '[hosts] No duplicate entries.'
+        return
+    }
+
+    if ($DryRun) {
+        Write-Output "[hosts] [dry-run] Would remove $removed duplicate entry/entries from the hosts file."
+        return
+    }
+
+    # Write a complete replacement FIRST, check it, and only then swap it in.
+    # Writing over the live file directly is not survivable: Set-Content
+    # truncates before it writes, so a write that fails part way leaves the
+    # machine with an empty hosts file. That is not hypothetical -- Defender
+    # guards this specific file and can reject the write after the truncate,
+    # which empties it ("Stream was not readable"). A temp-then-replace keeps
+    # the original intact no matter where the failure lands.
+    $backup = "$hosts.upkeep-bak"
+    $tmp = "$hosts.upkeep-tmp"
+    try {
+        Copy-Item -LiteralPath $hosts -Destination $backup -Force -ErrorAction Stop
+
+        # ASCII, no BOM: the resolver does not treat a UTF-8 BOM as whitespace,
+        # so the first entry after one is silently ignored.
+        Set-Content -LiteralPath $tmp -Value $kept -Encoding ASCII -ErrorAction Stop
+
+        # Refuse to install a replacement that lost content. Catches a
+        # truncated or partially flushed write before it reaches the real file.
+        $check = @(Get-Content -LiteralPath $tmp -ErrorAction Stop)
+        if ($check.Count -ne $kept.Count) {
+            throw "staged file has $($check.Count) lines, expected $($kept.Count)"
+        }
+
+        Move-Item -LiteralPath $tmp -Destination $hosts -Force -ErrorAction Stop
+        Write-Output "[hosts] Removed $removed duplicate entry/entries (backup: $backup)."
+        ipconfig /flushdns | Out-Null
+    } catch {
+        Write-Output "[hosts] WARNING: could not rewrite the hosts file: $($_.Exception.Message)"
+        Write-Output "[hosts] The hosts file was left unchanged."
+        # A failed Move leaves the original in place; only the staging file
+        # needs clearing. Security software commonly blocks writes here.
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Output ""
@@ -200,15 +306,6 @@ function Test-ServicingEntry {
     return ($Id -like 'WPFFeature*') -or ($servicingEntries -contains $Id)
 }
 
-function Register-ResumeTask {
-    param([string[]]$ArgList)
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ($ArgList -join ' ')
-    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
-    Register-ScheduledTask -TaskName $resumeTaskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
-}
-
 function Test-PendingReboot {
     $keys = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
@@ -227,14 +324,14 @@ if (-not $DryRun) {
 
 $deferServicing = $false
 if (Test-PendingReboot) {
-    if ($IgnorePendingReboot -or $Resumed) {
+    if ($IgnorePendingReboot) {
         Write-Output "[preflight] WARNING: Windows still reports a pending restart. Continuing;"
         Write-Output "[preflight] the tweaks phase is time-limited if servicing stays blocked."
     } else {
         $deferServicing = $true
         Write-Output "[preflight] Windows has a restart pending (usually from Windows Update)."
         Write-Output "[preflight] Everything runs now except the few tweaks that need Windows servicing;"
-        Write-Output "[preflight] those are scheduled to run automatically at the next sign-in after a restart."
+        Write-Output "[preflight] those are deferred. Restart manually when ready, then run setup again."
     }
 }
 Write-Output ""
@@ -249,14 +346,14 @@ if ($SkipRestorePoint) {
     Write-Output "[restore] [dry-run] Would enable System Restore on $env:SystemDrive and create a restore point 'Setup-NewPC'."
     Add-PhaseResult 'Restore point' 'DryRun'
 } else {
-    Write-Output "[restore] Creating a System Restore point (your undo button for everything below)..."
+    Write-Output "[restore] Creating a System Restore point (does not replace a personal file backup)..."
     try {
         Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
 
         # Windows silently refuses a second restore point within 24h unless
         # this frequency guard is lifted; set it to 0 like winutil does.
         $srPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
-        Set-ItemProperty -Path $srPath -Name 'SystemRestorePointCreationFrequency' -Value 0 -Type DWord
+        # Respect Windows restore-point frequency policy.
 
         Checkpoint-Computer -Description 'Setup-NewPC' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
         Write-Output "[restore] Restore point created."
@@ -271,6 +368,7 @@ if ($SkipRestorePoint) {
 # ---------------------------------------------------------------------------
 # Phase 2: winutil tweaks (headless via -Config)
 # ---------------------------------------------------------------------------
+try {
 function Invoke-WinutilConfig {
     # Runs winutil headless on $ConfigPath in a child process with a time
     # limit. In-process, a DISM call stuck in the servicing queue cannot be
@@ -292,30 +390,60 @@ function Invoke-WinutilConfig {
 
     Write-Output "[tweaks] Downloading winutil from $url and applying '$ConfigPath' (this can take several minutes, limit $timeoutMin min)..."
     try {
-        $winutilScript = Invoke-RestMethod -Uri $url -ErrorAction Stop
+        $winutilScript = Invoke-RestMethod -Uri $url -TimeoutSec 60 -ErrorAction Stop
         $workDir = Join-Path $env:TEMP 'Upkeep'
         New-Item -ItemType Directory -Path $workDir -Force | Out-Null
         $winutilFile = Join-Path $workDir 'winutil.ps1'
         Set-Content -LiteralPath $winutilFile -Value $winutilScript -Encoding UTF8
 
-        $configFull = (Resolve-Path -LiteralPath $ConfigPath).Path
-        $winutilArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$winutilFile`"", '-Config', "`"$configFull`"")
-        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $winutilArgs -NoNewWindow -PassThru
-        if ($proc.WaitForExit($timeoutMin * 60 * 1000)) {
-            Write-Output "[tweaks] winutil finished."
-            Add-PhaseResult 'Windows tweaks' 'OK'
-        } else {
-            Write-Output "[tweaks] ERROR: winutil did not finish within $timeoutMin min -- stopping it and continuing."
-            & taskkill.exe /PID $proc.Id /T /F | Out-Null
-            Add-PhaseResult 'Windows tweaks' 'Failed' "timed out after $timeoutMin min (restart Windows and re-run tweaks)"
+        $selections = @((Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json))
+        $hosts = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+        if (Test-Path -LiteralPath $hosts) { Copy-Item -LiteralPath $hosts -Destination (Join-Path $reportDir 'hosts-before.txt') -ErrorAction Stop }
+        foreach ($selection in $selections) {
+            try {
+                # Upstream rejects the entire import on unknown IDs. Isolate each
+                # selection so a retired tweak cannot invalidate the others.
+                if ($selection -notmatch '^WPF[A-Za-z0-9_]+$' -or $winutilScript -notmatch [regex]::Escape([string]$selection)) {
+                    Add-PhaseResult "Tweak $selection" 'Skipped' 'No longer available in upstream winutil; other selections continue.'
+                    continue
+                }
+                $singleConfig = Join-Path $reportDir 'winutil-selection.json'
+                ConvertTo-Json -InputObject @($selection) | Set-Content -LiteralPath $singleConfig -Encoding UTF8
+                $winutilArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$winutilFile`"", '-Config', "`"$singleConfig`"")
+                $proc = Start-Process powershell.exe -ArgumentList $winutilArgs -NoNewWindow -PassThru
+                $null = $proc.Handle
+                try {
+                    if (-not $proc.WaitForExit($timeoutMin * 60 * 1000)) {
+                        & taskkill.exe /PID $proc.Id /T /F | Out-Null
+                        throw "Timed out after $timeoutMin minutes. Restart manually if servicing is pending, then retry."
+                    }
+                    $proc.WaitForExit()
+                    if ($proc.ExitCode -ne 0) { throw "winutil exited $($proc.ExitCode). See setup.log." }
+                    Add-PhaseResult "Tweak $selection" 'Completed' 'winutil exited 0; review setup.log for upstream warnings.'
+                } finally { $proc.Dispose() }
+            } catch { Add-PhaseResult "Tweak $selection" 'Failed' $_.Exception.Message }
         }
     } catch {
         Write-Output "[tweaks] ERROR: winutil run failed: $($_.Exception.Message)"
         Add-PhaseResult 'Windows tweaks' 'Failed' $_.Exception.Message
     }
+
+    # winutil's Adobe block-list tweak (WPFTweaksBlockAdobeNet) downloads a
+    # hosts file and bare `Add-Content`s it, with no check for what is already
+    # there. Re-running this setup therefore appends the whole list AGAIN --
+    # observed at 1886 lines, 935 of them exact duplicates, and two nested
+    # #AdobeNetBlock marker pairs. Nothing breaks (the resolver takes the first
+    # match) but the file grows without bound every run.
+    #
+    # winutil is fetched fresh from the internet at run time, so its script
+    # cannot be patched from here. Dedupe afterwards instead. Runs whether or
+    # not winutil reported success: a partial run still appends.
+    try { Repair-HostsFile } catch { Add-PhaseResult 'Hosts cleanup' 'Failed' $_.Exception.Message }
 }
 
-if ($SkipTweaks) {
+if (-not $SkipRestorePoint -and ($phaseResults | Where-Object { $_.Phase -eq 'Restore point' -and $_.Status -eq 'Failed' })) {
+    Add-PhaseResult 'Windows tweaks' 'Deferred' 'Restore point failed. Fix System Protection before applying third-party tweaks.'
+} elseif ($SkipTweaks) {
     Write-Output "[tweaks] Skipped by request."
     Add-PhaseResult 'Windows tweaks' 'Skipped'
 } elseif (-not (Test-Path -LiteralPath $WinutilConfig)) {
@@ -325,7 +453,7 @@ if ($SkipTweaks) {
     $ids = @()
     # Parenthesized: PS 5.1's ConvertFrom-Json emits a JSON array as ONE
     # pipeline object, so without it every id collapses into a single string.
-    try { $ids = @((Get-Content -LiteralPath $WinutilConfig -Raw | ConvertFrom-Json) | ForEach-Object { [string]$_ }) } catch {}
+    try { $ids = @((Get-Content -LiteralPath $WinutilConfig -Raw | ConvertFrom-Json) | ForEach-Object { [string]$_ }) } catch { Add-PhaseResult 'Windows tweaks' 'Failed' ('Invalid config: ' + $_.Exception.Message) }
     $deferredIds = @()
     if ($deferServicing) { $deferredIds = @($ids | Where-Object { Test-ServicingEntry $_ }) }
     $nowIds = @($ids | Where-Object { $deferredIds -notcontains $_ })
@@ -340,26 +468,15 @@ if ($SkipTweaks) {
         $configNow = $WinutilConfig
         if ($deferredIds.Count -gt 0) {
             # Configs must survive the restart, so ProgramData rather than %TEMP%.
-            $stateDir = Join-Path $env:ProgramData 'Upkeep'
+            $stateDir = $reportDir
             New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
             $configNow = Join-Path $stateDir 'winutil-now.json'
             $configLater = Join-Path $stateDir 'winutil-after-restart.json'
             # -InputObject keeps a one-element list a JSON array (piping unrolls it).
             Set-Content -LiteralPath $configNow -Value (ConvertTo-Json -InputObject $nowIds) -Encoding UTF8
             Set-Content -LiteralPath $configLater -Value (ConvertTo-Json -InputObject $deferredIds) -Encoding UTF8
-            try {
-                Register-ResumeTask @(
-                    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"",
-                    '-SkipRestorePoint', '-SkipDrivers', '-SkipApps', '-Toggles', '""',
-                    '-WinutilConfig', "`"$configLater`"", '-Resumed'
-                )
-                Write-Output "[tweaks] Scheduled for after restart (needs Windows servicing): $($deferredIds -join ', ')"
-                Add-PhaseResult 'Tweaks after restart' 'Scheduled' ($deferredIds -join ', ')
-            } catch {
-                Write-Output "[tweaks] WARNING: could not schedule the after-restart task: $($_.Exception.Message)"
-                Write-Output "[tweaks] Skipping $($deferredIds -join ', ') -- re-run tweaks after restarting."
-                Add-PhaseResult 'Tweaks after restart' 'Failed' "not scheduled: $($deferredIds -join ', ')"
-            }
+            Add-PhaseResult 'Tweaks after restart' 'Deferred' ("Restart manually, then re-run tweaks: " + ($deferredIds -join ', '))
+
         }
 
         if ($nowIds.Count -eq 0) {
@@ -371,6 +488,8 @@ if ($SkipTweaks) {
     }
 }
 
+
+} catch { Add-PhaseResult 'Windows tweaks' 'Failed' $_.Exception.Message }
 # ---------------------------------------------------------------------------
 # Phase 3: registry toggles
 # ---------------------------------------------------------------------------
@@ -417,6 +536,7 @@ if (-not $Toggles -or $Toggles.Count -eq 0) {
     foreach ($slug in $Toggles) {
         if (-not $toggleDefs.ContainsKey($slug)) {
             Write-Output "[toggles] WARNING: unknown toggle '$slug' -- skipping."
+            $failedToggles.Add($slug)
             continue
         }
         if ($DryRun) {
@@ -426,6 +546,10 @@ if (-not $Toggles -or $Toggles.Count -eq 0) {
         }
         try {
             foreach ($entry in $toggleDefs[$slug]) {
+                $key = Get-Item -LiteralPath $entry.Path -ErrorAction SilentlyContinue
+                $exists = $key -and ($key.GetValueNames() -contains $entry.Name)
+                $registryBackup.Add([pscustomobject]@{ Path=$entry.Path; Name=$entry.Name; Exists=[bool]$exists; Value=$(if ($exists) { $key.GetValue($entry.Name) } else { $null }); Type=$(if ($exists) { [string]$key.GetValueKind($entry.Name) } else { $entry.Type }) })
+                ConvertTo-Json -InputObject @($registryBackup.ToArray()) -Depth 8 | Set-Content -LiteralPath (Join-Path $reportDir 'registry-before.json') -Encoding UTF8
                 if (-not (Test-Path -LiteralPath $entry.Path)) {
                     New-Item -Path $entry.Path -Force | Out-Null
                 }
@@ -451,6 +575,7 @@ if (-not $Toggles -or $Toggles.Count -eq 0) {
 # ---------------------------------------------------------------------------
 # Phase 4: drivers (SDIO + NVCleanstall package for NVIDIA)
 # ---------------------------------------------------------------------------
+try {
 function Resolve-SdioExe {
     $dir = Get-SettingString 'SDIOPath'
     $candidates = @()
@@ -517,7 +642,14 @@ if ($SkipDrivers) {
     Write-Output "[drivers] Skipped by request."
     Add-PhaseResult 'Drivers (SDIO)' 'Skipped'
     Add-PhaseResult 'Drivers (NVIDIA)' 'Skipped'
-} else {
+ } else {
+    if (-not $DryRun) {
+        $driverBackup = Join-Path $reportDir 'drivers-before'
+        New-Item -ItemType Directory -Path $driverBackup -Force | Out-Null
+        $backupCode = Invoke-ProcessWithTimeout -FilePath pnputil.exe -ArgumentList @('/export-driver','*', "`"$driverBackup`"") -TimeoutMin 10
+        if ($null -eq $backupCode -or $backupCode -ne 0) { throw 'Driver backup failed; automatic driver installation skipped. Use Windows Update or the PC manufacturer.' }
+        Add-PhaseResult 'Driver backup' 'OK' $driverBackup
+    }
     $sdioSite = 'https://www.glenn.delahoy.com/'
     $sdioExe = Resolve-SdioExe
     $sdioHasPacks = $false
@@ -526,7 +658,7 @@ if ($SkipDrivers) {
     }
     # Only probe when SDIO would have to download something.
     $sdioSiteUp = $true
-    if (-not $sdioHasPacks) {
+    if (-not $DryRun -and -not $sdioHasPacks) {
         $sdioSiteUp = Test-UrlReachable $sdioSite
     }
     $sdioSkipReason = $null
@@ -574,7 +706,7 @@ if ($SkipDrivers) {
                 Add-PhaseResult 'Drivers (SDIO)' 'Failed' "timed out after $sdioTimeoutMin min"
             } else {
                 Write-Output "[drivers] SDIO finished (exit code $sdioExit)."
-                Add-PhaseResult 'Drivers (SDIO)' 'OK' "exit $sdioExit"
+                if ($sdioExit -in @(0,3010)) { Add-PhaseResult 'Drivers (SDIO)' 'OK' "exit $sdioExit" } else { Add-PhaseResult 'Drivers (SDIO)' 'Failed' "exit $sdioExit" }
             }
         } catch {
             Write-Output "[drivers] ERROR: SDIO run failed: $($_.Exception.Message)"
@@ -582,23 +714,7 @@ if ($SkipDrivers) {
         }
     }
 
-    # SDIO has no reliable per-driver exclusion for unattended runs, and it
-    # installs Intel's standalone Thunderbolt driver on USB4 controllers that
-    # must use the Windows inbox driver -- which kills the USB4 port. Undo it.
-    $usb4Script = Join-Path $PSScriptRoot 'Repair-Usb4Driver.ps1'
-    if (-not (Test-Path -LiteralPath $usb4Script)) {
-        Add-PhaseResult 'USB4 driver check' 'Skipped' 'Repair-Usb4Driver.ps1 missing'
-    } elseif ($DryRun) {
-        & $usb4Script -DryRun
-        Add-PhaseResult 'USB4 driver check' 'DryRun'
-    } else {
-        & $usb4Script
-        switch ($LASTEXITCODE) {
-            0       { Add-PhaseResult 'USB4 driver check' 'OK' }
-            3010    { Add-PhaseResult 'USB4 driver check' 'OK' 'replaced Intel Thunderbolt driver; restart needed' }
-            default { Add-PhaseResult 'USB4 driver check' 'Failed' "exit $LASTEXITCODE" }
-        }
-    }
+    Add-PhaseResult 'USB4 driver check' 'Skipped' 'Machine-specific repair is available separately; not applied automatically.'
 
     # NVIDIA GPU -> prefer the clean NVCleanstall-built package if prepared.
     $hasNvidia = $false
@@ -620,9 +736,10 @@ if ($SkipDrivers) {
             } else {
                 Write-Output "[drivers] NVIDIA GPU found -- running the prebuilt NVCleanstall package (no telemetry, no restart)..."
                 try {
-                    $proc = Start-Process -FilePath $nvPkg -ArgumentList @('-y', '-noreboot') -Wait -PassThru
-                    Write-Output "[drivers] NVCleanstall package finished (exit code $($proc.ExitCode))."
-                    Add-PhaseResult 'Drivers (NVIDIA)' 'OK' "exit $($proc.ExitCode)"
+                    $nvExit = Invoke-ProcessWithTimeout -FilePath $nvPkg -ArgumentList @('-y', '-noreboot') -TimeoutMin 30
+                    if ($null -eq $nvExit -or $nvExit -notin @(0,3010)) { throw "Driver installer failed or timed out: $nvExit" }
+                    Write-Output "[drivers] NVCleanstall package finished (exit code $nvExit)."
+                    Add-PhaseResult 'Drivers (NVIDIA)' 'OK' "exit $nvExit"
                 } catch {
                     Write-Output "[drivers] ERROR: NVCleanstall package failed: $($_.Exception.Message)"
                     Add-PhaseResult 'Drivers (NVIDIA)' 'Failed' $_.Exception.Message
@@ -638,8 +755,8 @@ if ($SkipDrivers) {
                     Add-PhaseResult 'Drivers (NVIDIA)' 'DryRun'
                 } else {
                     Write-Output "[drivers] NVIDIA GPU found - running the automatic clean driver update..."
-                    & $nvScript -Install -KeepAudio
-                    if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 1) {
+                    $LASTEXITCODE = Invoke-ProcessWithTimeout -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$nvScript`"", '-Install','-KeepAudio') -TimeoutMin 40
+                    if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -in @(0,3010)) {
                         Add-PhaseResult 'Drivers (NVIDIA)' 'OK' "clean driver (exit $LASTEXITCODE)"
                     } else {
                         Add-PhaseResult 'Drivers (NVIDIA)' 'Failed' "exit $LASTEXITCODE"
@@ -653,9 +770,12 @@ if ($SkipDrivers) {
     }
 }
 
+
+} catch { Add-PhaseResult 'Drivers' 'Failed' $_.Exception.Message }
 # ---------------------------------------------------------------------------
 # Phase 5: O&O ShutUp10++ (privacy settings)
 # ---------------------------------------------------------------------------
+try {
 if (-not $Oosu) {
     Write-Output "[oosu] Not requested (pass -Oosu to include O&O ShutUp10++)."
     Add-PhaseResult 'O&O ShutUp10++' 'Skipped'
@@ -684,14 +804,16 @@ if (-not $Oosu) {
                 Write-Output "[oosu] Downloading O&O ShutUp10++..."
                 New-Item -ItemType Directory -Path $oosuDir -Force | Out-Null
                 $ProgressPreference = 'SilentlyContinue'
-                Invoke-WebRequest -Uri 'https://dl5.oo-software.com/files/ooshutup10/OOSU10.exe' -OutFile $oosuExe
+                Invoke-WebRequest -Uri 'https://dl5.oo-software.com/files/ooshutup10/OOSU10.exe' -OutFile $oosuExe -UseBasicParsing -TimeoutSec 60
                 $ProgressPreference = 'Continue'
             }
+            if ((Get-AuthenticodeSignature -LiteralPath $oosuExe).Status -ne 'Valid') { throw 'O&O executable has no valid publisher signature.' }
             if ($autoPossible) {
                 Write-Output "[oosu] Applying privacy settings silently from: $oosuCfg"
                 # /nosrp: we already created our own restore point above.
-                $proc = Start-Process -FilePath $oosuExe -ArgumentList @("`"$oosuCfg`"", '/quiet', '/nosrp') -Wait -PassThru
-                Write-Output "[oosu] Done (exit code $($proc.ExitCode))."
+                $oosuExit = Invoke-ProcessWithTimeout -FilePath $oosuExe -ArgumentList @("`"$oosuCfg`"", '/quiet') -TimeoutMin 10
+                if ($null -eq $oosuExit -or $oosuExit -ne 0) { throw "O&O failed or timed out: $oosuExit" }
+                Write-Output "[oosu] Done (exit code $oosuExit)."
                 Add-PhaseResult 'O&O ShutUp10++' 'OK' 'applied silently'
             } else {
                 if ($OosuMode -eq 'auto') {
@@ -701,7 +823,7 @@ if (-not $Oosu) {
                 Write-Output "[oosu] Tip: afterwards use File > Export settings, save the .cfg, and put its path in settings.json"
                 Write-Output "[oosu] as OOSUConfigPath -- future automatic runs will use your own selection."
                 Start-Process -FilePath $oosuExe
-                Add-PhaseResult 'O&O ShutUp10++' 'OK' 'opened for manual review'
+                Add-PhaseResult 'O&O ShutUp10++' 'Manual' 'opened for manual review; no automatic changes confirmed'
             }
         } catch {
             Write-Output "[oosu] ERROR: $($_.Exception.Message)"
@@ -710,6 +832,8 @@ if (-not $Oosu) {
     }
 }
 
+
+} catch { Add-PhaseResult 'Privacy' 'Failed' $_.Exception.Message }
 # ---------------------------------------------------------------------------
 # Phase 6: apps
 # ---------------------------------------------------------------------------
@@ -725,11 +849,10 @@ if ($SkipApps) {
         Write-Output "[apps] Installing the '$AppsPreset' app pack..."
         # Hashtable splat: array splatting binds positionally on ps1 scripts,
         # which silently drops the -DryRun switch (verified the hard way).
-        $appArgs = @{ Preset = $AppsPreset }
+        $appArgs = @{ Preset = $AppsPreset; NoRebootPrompt=$true; ResultFile=$setupAppReport }
         if ($DryRun) { $appArgs.DryRun = $true }
         # Already elevated here, so Install-Apps.ps1 will not re-prompt.
-        & $installScript @appArgs
-        $appsExit = $LASTEXITCODE
+        try { & $installScript @appArgs; $appsExit = $LASTEXITCODE } catch { Write-Warning $_; $appsExit = 1 }
         if ($DryRun) {
             Add-PhaseResult 'Apps' 'DryRun'
         } elseif ($appsExit -eq 0) {
@@ -749,16 +872,20 @@ Write-Output "  SETUP SUMMARY"
 Write-Output "========================================"
 $phaseResults | Format-Table -AutoSize -Property Phase, Status, Detail | Out-String | Write-Output
 
+try { Stop-Transcript -ErrorAction Stop | Out-Null } catch {}
 $failedPhases = @($phaseResults | Where-Object { $_.Status -eq 'Failed' })
-if (-not $DryRun) {
-    if ($phaseResults | Where-Object { $_.Phase -eq 'Tweaks after restart' -and $_.Status -eq 'Scheduled' }) {
-        Write-Output "Restart Windows to finish: the remaining tweaks run automatically at your next sign-in."
-    } else {
-        Write-Output "A restart is recommended to finish applying drivers and tweaks."
-    }
+if (-not $DryRun -and -not $NoRebootPrompt) {
+    try {
+        . (Join-Path $PSScriptRoot 'steps\Setup-Resume.ps1')
+        $appResults = @()
+        if (Test-Path -LiteralPath $setupAppReport) { $appResults = @((Get-Content -LiteralPath $setupAppReport -Raw | ConvertFrom-Json)) }
+        $needsRestart = (Test-PendingReboot) -or [bool]($appResults | Where-Object { $_.ExitCode -eq 3010 }) -or [bool]($phaseResults | Where-Object { $_.Detail -match '\b3010\b' })
+        Request-SetupResume -Root $PSScriptRoot -Apps @(Get-RebootApps $appResults) -Tweaks $deferredIds -RestartRequired:$needsRestart
+    } catch { Write-Warning "Could not arrange continuation; no restart requested: $_" }
 }
 if ($failedPhases.Count -gt 0) {
     Write-Output "Some phases failed: $(($failedPhases | ForEach-Object { $_.Phase }) -join ', ')"
     exit 1
 }
+if ($deferredIds.Count) { exit 3010 }
 exit 0

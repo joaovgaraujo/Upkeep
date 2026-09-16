@@ -1,0 +1,155 @@
+name: Release
+
+# Builds the installer and portable zip, optionally code-signs them via
+# SignPath, and publishes a GitHub release.
+#
+# Signing is OPTIONAL and skips cleanly when unconfigured, so this workflow is
+# useful before a certificate exists. To turn it on, set the repo variables
+# SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG / SIGNPATH_POLICY_SLUG and
+# the secret SIGNPATH_API_TOKEN. See docs/CODE-SIGNING.md.
+#
+# Order matters: Upkeep.exe is signed BEFORE the installer and portable zip are
+# assembled, so the exe a user ends up running is itself signed. Signing only
+# the installer would leave an unsigned binary on disk after install.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui
+
+      - name: Test
+        run: cargo test --locked
+        working-directory: gui
+
+      - name: Test PowerShell orchestration
+        shell: powershell
+        run: |
+          Install-Module Pester -RequiredVersion 5.7.1 -Force -Scope CurrentUser -SkipPublisherCheck
+          Import-Module Pester -RequiredVersion 5.7.1
+          Invoke-Pester -Path ./tests -CI
+
+      - name: Build exe
+        run: cargo build --release --locked
+        working-directory: gui
+
+      # ---- Sign the application exe ------------------------------------
+      - name: Upload unsigned exe
+        id: unsigned-exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: gui/target/release/Upkeep.exe
+          if-no-files-found: error
+
+      - name: Sign exe
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: exe
+          github-artifact-id: ${{ steps.unsigned-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: gui/target/release
+
+      - name: Confirm exe signature
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          $s = Get-AuthenticodeSignature gui\target\release\Upkeep.exe
+          if ($s.Status -ne 'Valid') { throw "exe signature is $($s.Status)" }
+          Write-Host "Signed by: $($s.SignerCertificate.Subject)"
+
+      # ---- Package (consumes the signed exe) ---------------------------
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer and portable zip
+        shell: pwsh
+        run: |
+          .\Build-Installer.ps1 -SkipCargoBuild
+          .\Build-Portable.ps1 -SkipCargoBuild
+
+      # ---- Sign the installer ------------------------------------------
+      - name: Upload unsigned installer
+        id: unsigned-setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-setup
+          path: dist/Upkeep-Setup.exe
+          if-no-files-found: error
+
+      - name: Sign installer
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.unsigned-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist
+
+      - name: Confirm installer signature
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          $s = Get-AuthenticodeSignature dist\Upkeep-Setup.exe
+          if ($s.Status -ne 'Valid') { throw "installer signature is $($s.Status)" }
+          Write-Host "Signed by: $($s.SignerCertificate.Subject)"
+
+      # The portable zip is rebuilt after signing so it carries the signed exe.
+      # A zip cannot itself be Authenticode signed.
+      - name: Repack portable zip with signed exe
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: .\Build-Portable.ps1 -SkipCargoBuild
+
+      # ---- Publish ------------------------------------------------------
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/Upkeep-Setup.exe
+            dist/Upkeep-Portable.zip
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-FileHash dist\Upkeep-Setup.exe,dist\Upkeep-Portable.zip -Algorithm SHA256 |
+            ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
+            Set-Content dist\SHA256SUMS.txt
+          Get-Content dist\SHA256SUMS.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          body_path: docs/RELEASE-1.5.1.md
+          files: |
+            dist/Upkeep-Setup.exe
+            dist/Upkeep-Portable.zip
+            dist/SHA256SUMS.txt

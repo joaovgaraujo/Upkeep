@@ -22,11 +22,20 @@ fn main() {
     // Windows installer-detection trigger words ("update", "setup",
     // "install", "patch"), or the harness demands elevation and tests fail
     // with os error 740.
+    // A blank CompanyName/LegalCopyright is itself a mild signal to reputation
+    // heuristics (SmartScreen, AV file-reputation scoring), so fill them in.
+    // Every value below is checked against the trigger-word rule above.
     let mut res = winresource::WindowsResource::new();
     res.set_icon("assets/upkeep.ico");
     res.set("ProductName", "Upkeep");
     res.set("FileDescription", "Upkeep - Windows maintenance dashboard");
-    res.set("LegalCopyright", "");
+    res.set("CompanyName", "joaovguedes");
+    res.set(
+        "LegalCopyright",
+        "Copyright (c) 2026 joaovguedes. MIT licensed.",
+    );
+    res.set("OriginalFilename", "Upkeep.exe");
+    res.set("InternalName", "Upkeep");
     if let Err(e) = res.compile() {
         // In a debug build this is cosmetic, so warn and carry on. In a
         // RELEASE build it is not: without the Windows SDK resource compiler
