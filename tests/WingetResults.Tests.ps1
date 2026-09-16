@@ -29,12 +29,14 @@ function winget {
     if ('SCENARIO' -eq 'retry') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Other','Fixture.Other','1','2' }
     ''
 }
+try {
 if ('SCENARIO' -eq 'retry') {
     New-Item "$env:LOCALAPPDATA\Upkeep\Reports" -ItemType Directory -Force | Out-Null
     Set-Content "$env:LOCALAPPDATA\Upkeep\Reports\winget-failed.json" '["Fixture.App"]'
     & "$PSScriptRoot\Update-WingetApps.ps1" -NoChocoFallback -NoDeelevatedRetry -RetryFailed
 } else { & "$PSScriptRoot\Update-WingetApps.ps1" -NoChocoFallback -NoDeelevatedRetry }
 exit $LASTEXITCODE
+} catch { Write-Output $_.Exception.Message; exit 1 }
 '@
         Set-Content "$case\wrapper.ps1" $wrapper.Replace('SCENARIO', $Scenario)
         & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$case\wrapper.ps1" *> "$case\output.txt"
