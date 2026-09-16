@@ -2,8 +2,9 @@
 ; Build with Build-Installer.ps1 (or: ISCC.exe installer\Upkeep.iss)
 
 #define MyAppName "Upkeep"
-#define MyAppVersion "1.4.0"
+#define MyAppVersion "1.5.1"
 #define MyAppExeName "Upkeep.exe"
+#define MyOutputBase "Upkeep-Setup"
 
 [Setup]
 ; Stable AppId so upgrades replace the existing install
@@ -17,7 +18,7 @@ DisableProgramGroupPage=yes
 ; The app itself requires admin (UAC manifest); install machine-wide
 PrivilegesRequired=admin
 OutputDir=..\dist
-OutputBaseFilename=Upkeep-Setup
+OutputBaseFilename={#MyOutputBase}
 SetupIconFile=..\gui\assets\upkeep.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
@@ -33,8 +34,15 @@ ArchitecturesAllowed=x64compatible
 ; the GUI assumes PerMonitorV2 DPI, so anything below 10 is not supported.
 MinVersion=10.0
 ; Gives the setup exe its own version resource - absent by default, which
-; hurts SmartScreen reputation and IT deployment tooling.
+; hurts SmartScreen reputation and IT deployment tooling. Company/Description
+; fall back to AppPublisher/AppName, but Copyright and OriginalFileName have no
+; fallback and ship blank unless set here.
 VersionInfoVersion={#MyAppVersion}
+VersionInfoCompany=joaovguedes
+VersionInfoProductName={#MyAppName}
+VersionInfoDescription={#MyAppName} Setup
+VersionInfoCopyright=Copyright (C) 2026 joaovguedes. MIT licensed.
+VersionInfoOriginalFileName={#MyOutputBase}.exe
 LicenseFile=..\LICENSE
 
 [Languages]

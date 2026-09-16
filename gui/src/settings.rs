@@ -34,7 +34,7 @@ pub struct Settings {
     /// WinUtil bootstrap one-liner.
     #[serde(rename = "WinutilCommand", default = "default_winutil_command")]
     pub winutil_command: String,
-    /// UI language: "en" or "pt-BR". See `crate::i18n`.
+    /// UI language: "system" (Windows display language), "en" or "pt-BR".
     #[serde(rename = "Language", default = "default_language")]
     pub language: String,
     /// UI theme: "system" (follow the OS), "light" or "dark".
@@ -65,7 +65,7 @@ fn default_winutil_command() -> String {
     DEFAULT_WINUTIL_COMMAND.to_string()
 }
 fn default_language() -> String {
-    "en".to_string()
+    "system".to_string()
 }
 fn default_theme() -> String {
     "system".to_string()
@@ -149,9 +149,10 @@ pub fn load_settings(root: &Path) -> Settings {
             // Windows they want bigger text doesn't have to tell this app
             // too. A returning user's own choice (including an explicit
             // 100%) always overrides this once settings.json exists.
-            let mut s = Settings::default();
-            s.ui_scale = crate::theme::windows_text_scale();
-            s
+            Settings {
+                ui_scale: crate::theme::windows_text_scale(),
+                ..Default::default()
+            }
         }
     };
 
@@ -330,7 +331,7 @@ mod tests {
         assert_eq!(settings.stale_output_warn_sec, 120);
         assert_eq!(settings.winutil_command, DEFAULT_WINUTIL_COMMAND);
         assert!(settings.nvclean_package_path.is_empty());
-        assert_eq!(settings.language, "en");
+        assert_eq!(settings.language, "system");
         assert_eq!(settings.theme, "system");
         assert_eq!(settings.ui_scale, 1.0);
     }
@@ -356,7 +357,10 @@ mod tests {
         let settings: Settings = serde_json::from_str(strip_bom(json)).unwrap();
         assert_eq!(settings.sdio_scan_timeout_sec, 999);
         assert_eq!(settings.language, "pt-BR");
-        assert_eq!(settings.extra.get("Custom").and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(
+            settings.extra.get("Custom").and_then(|v| v.as_i64()),
+            Some(1)
+        );
     }
 
     /// End-to-end through `load_settings`, which is where the loss happened:
@@ -364,10 +368,7 @@ mod tests {
     /// `DashboardApp::new` then saved the defaults over the user's file.
     #[test]
     fn load_settings_reads_a_bom_prefixed_file_from_disk() {
-        let dir = std::env::temp_dir().join(format!(
-            "upkeep-bom-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("upkeep-bom-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let body = r#"{"SDIOScanTimeoutSec": 999, "Language": "pt-BR", "SomeFutureKey": "kept"}"#;
         // Exactly what PowerShell 5.1's `Set-Content -Encoding UTF8` writes.
@@ -409,10 +410,10 @@ mod tests {
     }
 
     #[test]
-    fn language_key_defaults_to_en_and_round_trips_pt_br() {
+    fn language_key_defaults_to_system_and_round_trips_pt_br() {
         let json = r#"{"SDIOPath": "C:\\SDIO"}"#;
         let settings: Settings = serde_json::from_str(json).unwrap();
-        assert_eq!(settings.language, "en");
+        assert_eq!(settings.language, "system");
 
         let json = r#"{"Language": "pt-BR"}"#;
         let settings: Settings = serde_json::from_str(json).unwrap();

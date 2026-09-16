@@ -69,7 +69,8 @@ que falta:
 - **Reinicialização pendente (Windows Update).** Os poucos ajustes do winutil
   que passam pelo serviço de manutenção do Windows (remoção do Recall,
   limpeza de componentes, armazenamento reservado, recursos opcionais) ficam
-  para uma tarefa única que roda no próximo login; todo o resto roda na hora.
+  pendentes. Uma pergunta permite reiniciar agora, continuar após reiniciar
+  depois, ou cancelar. Só a continuação aprovada roda após reiniciar e entrar.
   Instaladores que ativam recursos do Windows (Docker Desktop, WSL e
   distribuições WSL) são pulados com um aviso até você reiniciar.
 - **Nada espera para sempre.** O winutil (`WinutilTimeoutMin`, padrão 20),
@@ -82,11 +83,14 @@ que falta:
   fornecendo drivers.
 - **Driver Intel Thunderbolt em controladoras USB4.** O SDIO instala o driver
   Thunderbolt avulso da Intel em controladoras feitas para o driver USB4
-  nativo do Windows, o que desativa a porta. O `Repair-Usb4Driver.ps1` roda
-  depois do SDIO (na configuração e no botão Drivers), faz backup desse
-  pacote e o remove.
-- **winget ausente** em uma instalação nova: o App Installer é registrado
-  antes.
+  nativo do Windows, o que desativa a porta. A configuração agora deixa a
+  troca de drivers desmarcada e não aplica o reparo específico desta máquina
+  automaticamente. O script de reparo continua disponível separadamente.
+- **WinGet ausente:** tenta registrar o App Installer e usar o módulo oficial
+  de reparo. Prepara Chocolatey independentemente como alternativa.
+- **Prévia, repetição de falhas e backups:** veja as
+  [notas da versão 1.5.0](docs/RELEASE-1.5.0.md). Os relatórios ficam em
+  `%LOCALAPPDATA%\Upkeep\Reports`, com instruções para cada falha.
 
 ## Opcional: tempos de inicialização
 

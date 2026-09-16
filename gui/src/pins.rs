@@ -231,13 +231,22 @@ where choco >nul 2>&1 && (
     #[test]
     fn accepts_the_ids_the_pins_page_actually_lists() {
         let existing = vec![];
-        for id in ["Notepad++.Notepad++", "Adobe.Acrobat.Reader.64-bit", "7zip.7zip"] {
+        for id in [
+            "Notepad++.Notepad++",
+            "Adobe.Acrobat.Reader.64-bit",
+            "7zip.7zip",
+        ] {
             assert!(
                 validate_pin_id(id, Manager::Winget, &existing).is_ok(),
                 "winget id {id} was listed but rejected"
             );
         }
-        for id in ["git.install", "python.install", "vcredist140", "7zip.install"] {
+        for id in [
+            "git.install",
+            "python.install",
+            "vcredist140",
+            "7zip.install",
+        ] {
             assert!(
                 validate_pin_id(id, Manager::Choco, &existing).is_ok(),
                 "choco id {id} was listed but rejected"

@@ -35,7 +35,7 @@ pub const TWEAKS: &[TweakOption] = &[
     TweakOption {
         slug: "telemetry",
         ids: &["WPFTweaksTelemetry"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
@@ -53,43 +53,43 @@ pub const TWEAKS: &[TweakOption] = &[
     TweakOption {
         slug: "debloat-apps",
         ids: DEBLOAT_APPX,
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "store-search",
         ids: &["WPFTweaksDisableStoreSearch"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "windows-ai",
         ids: &["WPFTweaksWindowsAI"],
-        default_on: true,
+        default_on: false,
         caution: true,
     },
     TweakOption {
         slug: "edge-debloat",
         ids: &["WPFTweaksEdgeDebloat"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "brave-debloat",
         ids: &["WPFTweaksBraveDebloat"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "delivery-optimization",
         ids: &["WPFTweaksDeliveryOptimization"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "services-manual",
         ids: &["WPFTweaksServices"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
@@ -101,43 +101,43 @@ pub const TWEAKS: &[TweakOption] = &[
     TweakOption {
         slug: "explorer-discovery",
         ids: &["WPFTweaksDisableExplorerAutoDiscovery"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "disk-cleanup",
         ids: &["WPFTweaksDiskCleanup"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "temp-files",
         ids: &["WPFTweaksDeleteTempFiles"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "wpbt",
         ids: &["WPFTweaksWPBT"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
     TweakOption {
         slug: "adobe-block",
         ids: &["WPFTweaksBlockAdobeNet"],
-        default_on: true,
+        default_on: false,
         caution: true,
     },
     TweakOption {
         slug: "background-apps",
         ids: &["WPFTweaksDisableBGapps"],
-        default_on: true,
+        default_on: false,
         caution: true,
     },
     TweakOption {
         slug: "razer-block",
         ids: &["WPFTweaksRazerBlock"],
-        default_on: true,
+        default_on: false,
         caution: false,
     },
 ];
@@ -151,7 +151,7 @@ pub struct ToggleOption {
 pub const TOGGLES: &[ToggleOption] = &[
     ToggleOption {
         slug: "dark-theme",
-        default_on: true,
+        default_on: false,
     },
     ToggleOption {
         slug: "file-extensions",
@@ -159,23 +159,23 @@ pub const TOGGLES: &[ToggleOption] = &[
     },
     ToggleOption {
         slug: "hidden-files",
-        default_on: true,
+        default_on: false,
     },
     ToggleOption {
         slug: "mouse-accel-off",
-        default_on: true,
+        default_on: false,
     },
     ToggleOption {
         slug: "num-lock",
-        default_on: true,
+        default_on: false,
     },
     ToggleOption {
         slug: "sticky-keys-off",
-        default_on: true,
+        default_on: false,
     },
     ToggleOption {
         slug: "verbose-bsod",
-        default_on: true,
+        default_on: false,
     },
     ToggleOption {
         slug: "long-paths",
@@ -237,16 +237,26 @@ mod tests {
 
     #[test]
     fn every_option_has_text_in_both_languages() {
-        use crate::i18n::{tweak_text, toggle_text, Lang};
+        use crate::i18n::{toggle_text, tweak_text, Lang};
         for lang in [Lang::En, Lang::PtBr] {
             for t in TWEAKS {
                 let (title, why) = tweak_text(lang, t.slug);
-                assert!(!title.is_empty(), "missing tweak title: {} {:?}", t.slug, lang);
+                assert!(
+                    !title.is_empty(),
+                    "missing tweak title: {} {:?}",
+                    t.slug,
+                    lang
+                );
                 assert!(!why.is_empty(), "missing tweak why: {} {:?}", t.slug, lang);
             }
             for t in TOGGLES {
                 let (title, why) = toggle_text(lang, t.slug);
-                assert!(!title.is_empty(), "missing toggle title: {} {:?}", t.slug, lang);
+                assert!(
+                    !title.is_empty(),
+                    "missing toggle title: {} {:?}",
+                    t.slug,
+                    lang
+                );
                 assert!(!why.is_empty(), "missing toggle why: {} {:?}", t.slug, lang);
             }
         }

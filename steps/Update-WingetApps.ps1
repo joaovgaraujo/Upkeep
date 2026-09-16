@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Runs the winget upgrade pass and reports, per package, what it could NOT
     upgrade and why.
@@ -21,10 +21,34 @@
     a machine-scope manifest, or an app that self-updates so winget's tracked
     version never moves. It is NOT a broken winget.
 
+    Three refusals are recovered automatically before giving up on a package:
+
+      * USER SCOPE vs ADMIN (0x8A15007D / -1978335107): "The package installed
+        for user scope cannot be uninstalled when running with administrator
+        privileges." The engine runs elevated so it can install machine-scope
+        packages, which is exactly what makes winget refuse the user-scope
+        ones. Retried unelevated via steps\Deelevate.ps1. Verified against
+        Ventoy 1.1.16 -> 1.1.17, which fails elevated and succeeds unelevated.
+
+      * MODIFIED PORTABLE (-1978335145): "Unable to remove Portable package as
+        it has been modified; to override this check use --force." Portable
+        packages are a bare exe plus a shim, and anything that rewrites either
+        (topgrade updating itself, an antivirus rewriting the file) trips the
+        hash check forever after. Retried with --force. Verified against
+        topgrade 17.7.0 -> 17.9.0.
+
+      * SCOPE MISMATCH: the manifest ships only a machine-scope installer but
+        the app is installed user-scope (or vice versa). winget reports this as
+        the generic UPDATE_NOT_APPLICABLE, so this step checks the ARP hive the
+        app is registered in and says which way round it is, because the fix
+        differs (reinstall at the other scope vs let the app self-update).
+        Zed is the live example: installed under HKCU in %LOCALAPPDATA%, while
+        ZedIndustries.Zed's manifest declares Scope: machine.
+
     When a package winget can't move is also available in Chocolatey, this
     retries it there (-NoChocoFallback to disable). That genuinely recovers
-    some of them: Ventoy is user-scope and winget refuses it, while the choco
-    package upgrades cleanly.
+    some of them: the choco package sometimes ships an installer that applies
+    where winget's does not.
 
 .PARAMETER LogFile
     Append winget's raw output here (the engine passes its run log).
@@ -32,18 +56,25 @@
 .PARAMETER NoChocoFallback
     Don't retry still-pending packages through Chocolatey.
 
+.PARAMETER NoDeelevatedRetry
+    Don't retry user-scope packages unelevated. Escape hatch for environments
+    where registering a scheduled task is blocked by policy.
+
 .NOTES
-    Exit codes: 0 = the pass ran (even if some packages are still pending;
-    those are reported, not treated as a run failure). 2 = winget is not
-    installed, so there was nothing to do. 1 = the pass genuinely failed.
+    Exit codes: 0 = pending packages were updated; 2 = winget is absent;
+    1 = inventory/upgrade failed or packages remain pending after retries.
 #>
 [CmdletBinding()]
 param(
     [string]$LogFile,
-    [switch]$NoChocoFallback
+    [switch]$NoChocoFallback,
+    [switch]$NoDeelevatedRetry,
+    [switch]$RetryFailed
 )
 
 $ErrorActionPreference = 'Continue'
+
+. (Join-Path $PSScriptRoot 'Deelevate.ps1')
 
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     # Exit 2 = "nothing to do here", not a failure - the engine already
@@ -57,7 +88,10 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
 # winget has no --output json for upgrade, so this uses the header column
 # offsets rather than splitting on whitespace (names contain spaces).
 function Get-PendingUpgrades {
-    $raw = winget upgrade --include-unknown --accept-source-agreements 2>&1 | Out-String
+    $raw = winget upgrade --include-unknown --accept-source-agreements --disable-interactivity 2>&1 | Out-String
+    if ($LASTEXITCODE -notin @(0, -1978335212, -1978335189)) {
+        throw "winget inventory failed (exit $LASTEXITCODE): $raw"
+    }
     $lines = $raw -split "`r?`n"
     $result = @{}
 
@@ -73,17 +107,17 @@ function Get-PendingUpgrades {
     }
 
     $headerIdx = -1
-    for ($i = 0; $i -lt $limit; $i++) {
-        if ($lines[$i] -match '^Name\s+Id\s+Version\s+Available') { $headerIdx = $i; break }
+    for ($i = 0; $i -lt ($limit - 1); $i++) {
+        if ($lines[$i + 1].Trim() -match '^-{5,}$') { $headerIdx = $i; break }
     }
     if ($headerIdx -lt 0) { return $result }
-
-    $header = $lines[$headerIdx]
-    $idPos = $header.IndexOf('Id')
-    $verPos = $header.IndexOf('Version')
-    $availPos = $header.IndexOf('Available')
-    $srcPos = $header.IndexOf('Source')
-    if ($idPos -lt 0 -or $verPos -le $idPos -or $availPos -le $verPos) { return $result }
+    # Column positions are stable across translated header labels.
+    $columns = @([regex]::Matches($lines[$headerIdx], '\S.*?(?=\s{2,}|$)'))
+    if ($columns.Count -lt 4) { throw 'Unrecognized winget inventory columns; refusing to report a successful inventory.' }
+    $idPos = $columns[1].Index
+    $verPos = $columns[2].Index
+    $availPos = $columns[3].Index
+    $srcPos = if ($columns.Count -gt 4) { $columns[4].Index } else { -1 }
 
     for ($j = $headerIdx + 2; $j -lt $limit; $j++) {
         $l = $lines[$j]
@@ -100,18 +134,79 @@ function Get-PendingUpgrades {
         $cur = $l.Substring($verPos, $availPos - $verPos).Trim()
         $end = if ($srcPos -gt $availPos -and $l.Length -gt $srcPos) { $srcPos - $availPos } else { $l.Length - $availPos }
         $avail = $l.Substring($availPos, $end).Trim()
-        if ($id) { $result[$id] = [pscustomobject]@{ Current = $cur; Available = $avail } }
+        if ($id -match '^[A-Za-z0-9][A-Za-z0-9._+\-]+$' -and $avail -notmatch '\s') { $result[$id] = [pscustomobject]@{ Current = $cur; Available = $avail } }
     }
+    # Never individually retry the installer that caused an unsolicited reboot.
+    $result.Remove('ElectronicArts.EADesktop')
     $result
 }
 
+# Which ARP hive is this app registered in? HKCU means a user-scope install,
+# and a manifest that only ships a machine-scope installer will never apply to
+# it. Matched on the winget id's product half because ARP DisplayNames rarely
+# match the id ("ZedIndustries.Zed" -> "Zed").
+function Get-InstallScope {
+    param([string]$Id)
+
+    $product = ($Id -split '\.')[-1]
+    if (-not $product) { return 'unknown' }
+    $pattern = [regex]::Escape($product)
+
+    $hives = @(
+        @{ Scope = 'user'; Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' },
+        @{ Scope = 'machine'; Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' },
+        @{ Scope = 'machine'; Path = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' }
+    )
+    foreach ($h in $hives) {
+        $hit = Get-ItemProperty $h.Path -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match $pattern } |
+            Select-Object -First 1
+        if ($hit) { return $h.Scope }
+    }
+    'unknown'
+}
+
+# One `winget upgrade` attempt. Returns exit code + combined output.
+function Invoke-WingetUpgrade {
+    param([string]$Id, [string[]]$Extra = @())
+
+    $out = winget upgrade --id $Id --exact --include-unknown --silent --disable-interactivity `
+        --accept-source-agreements --accept-package-agreements @Extra 2>&1 | Out-String
+    [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $out }
+}
+
+$reportDir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
+New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+$retryPath = Join-Path $reportDir 'winget-failed.json'
+$retryIds = @()
+if ($RetryFailed) {
+    if (-not (Test-Path -LiteralPath $retryPath)) { Write-Host 'No previous failed-app report.'; exit 2 }
+    $retryIds = @((Get-Content -LiteralPath $retryPath -Raw | ConvertFrom-Json))
+    if (-not $retryIds.Count) { Write-Host 'No failed apps to retry.'; exit 0 }
+}
 Write-Host '[winget] Checking for pending upgrades...'
 $before = Get-PendingUpgrades
+if ($RetryFailed) {
+    foreach ($key in @($before.Keys)) { if ($retryIds -notcontains $key) { $before.Remove($key) } }
+}
+ConvertTo-Json -InputObject @($before.Keys) | Set-Content -LiteralPath $retryPath -Encoding UTF8
 Write-Host "[winget] $($before.Count) package(s) have upgrades available."
 
 Write-Host '[winget] Upgrading winget packages silently...'
-$output = winget upgrade --all --include-unknown --silent --disable-interactivity `
-    --accept-source-agreements --accept-package-agreements 2>&1 | ForEach-Object ToString
+$upgradeExit = 0
+if ($RetryFailed) {
+    $output = @()
+    foreach ($id in @($before.Keys)) {
+        if ($id -eq 'ElectronicArts.EADesktop') { continue }
+        $attempt = Invoke-WingetUpgrade -Id $id
+        $output += $attempt.Output
+        if ($attempt.ExitCode -ne 0) { $upgradeExit = $attempt.ExitCode }
+    }
+} else {
+    $output = winget upgrade --all --include-unknown --silent --disable-interactivity `
+        --accept-source-agreements --accept-package-agreements 2>&1 | ForEach-Object ToString
+    $upgradeExit = $LASTEXITCODE
+}
 $output | Write-Host
 if ($LogFile) {
     try { $output | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
@@ -120,12 +215,17 @@ if ($LogFile) {
 $after = Get-PendingUpgrades
 $upgraded = @($before.Keys | Where-Object { -not $after.ContainsKey($_) })
 $stuck = @($before.Keys | Where-Object { $after.ContainsKey($_) })
+ConvertTo-Json -InputObject $stuck | Set-Content -LiteralPath $retryPath -Encoding UTF8
 
 if ($upgraded.Count -gt 0) {
     Write-Host "[winget] Upgraded $($upgraded.Count) package(s): $($upgraded -join ', ')"
 }
 
 if ($stuck.Count -eq 0) {
+    if ($upgradeExit -notin @(0, -1978335189)) {
+        Write-Host "[error] winget upgrade returned $upgradeExit; see the installer output."
+        exit 1
+    }
     Write-Host '[winget] All pending winget upgrades applied.'
     exit 0
 }
@@ -134,13 +234,59 @@ if ($stuck.Count -eq 0) {
 Write-Host "[winget] $($stuck.Count) package(s) did not upgrade:"
 $notApplicable = @()
 foreach ($id in $stuck) {
-    $res = winget upgrade --id $id --exact --include-unknown --silent --disable-interactivity `
-        --accept-source-agreements --accept-package-agreements 2>&1 | Out-String
-    $code = $LASTEXITCODE
+    $attempt = Invoke-WingetUpgrade -Id $id
+    $res = $attempt.Output
+    $code = $attempt.ExitCode
+
+    # -1978335107 (0x8A15007D): winget refuses to touch a user-scope package
+    # while elevated. Our elevation is the whole problem, so drop it and retry.
+    if ($code -eq -1978335107 -or $res -match 'user scope cannot be uninstalled when running with administrator') {
+        if ($NoDeelevatedRetry) {
+            Write-Host "[winget]   $id : user-scope package and we are elevated; unelevated retry disabled."
+        } elseif (-not (Test-Elevated)) {
+            # Already unelevated and still refused: retrying changes nothing.
+            Write-Host "[winget]   $id : winget reports a user-scope conflict, but this run is not elevated."
+        } else {
+            Write-Host "[winget]   $id : user-scope package refused while elevated - retrying unelevated..."
+            $deelev = Invoke-Deelevated -Command "winget upgrade --id $id --exact --include-unknown --silent --disable-interactivity --accept-source-agreements --accept-package-agreements"
+            if ($null -eq $deelev) {
+                Write-Host "[winget]   $id : could not run unelevated (scheduled task unavailable) - still pending."
+            } else {
+                $res = $deelev.Output
+                $code = $deelev.ExitCode
+                if ($code -eq 0) {
+                    Write-Host "[winget]   $id : upgraded unelevated."
+                    continue
+                }
+            }
+        }
+    }
+
+    # -1978335145: a portable package's exe or shim no longer matches what
+    # winget recorded, so it won't replace it without being told to. Nothing
+    # about that is recoverable by waiting -- it stays modified forever.
+    if ($code -eq -1978335145 -or $res -match 'has been modified; to override this check use --force') {
+        Write-Host "[winget]   $id : portable package was modified since install - retrying with --force..."
+        $forced = Invoke-WingetUpgrade -Id $id -Extra @('--force')
+        $res = $forced.Output
+        $code = $forced.ExitCode
+        if ($code -eq 0) {
+            Write-Host "[winget]   $id : upgraded with --force."
+            continue
+        }
+    }
 
     # 0x8A15002B = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE (-1978335189)
     if ($code -eq -1978335189 -or $res -match 'No applicable upgrade found') {
-        Write-Host "[winget]   $id ($($before[$id].Current) -> $($before[$id].Available)): no applicable installer for how this app is installed here (user-scope install, or the app self-updates)."
+        $scope = Get-InstallScope -Id $id
+        $move = "$($before[$id].Current) -> $($before[$id].Available)"
+        if ($scope -eq 'user') {
+            Write-Host "[winget]   $id ($move): installed per-user, but the manifest's installer does not apply to that. Let the app update itself, or reinstall it machine-wide with: winget install --id $id -e --scope machine"
+        } elseif ($scope -eq 'machine') {
+            Write-Host "[winget]   $id ($move): installed machine-wide, but the manifest's installer does not apply to that. Let the app update itself, or reinstall it with: winget install --id $id -e --scope user"
+        } else {
+            Write-Host "[winget]   $id ($move): no applicable installer for how this app is installed here (the app probably self-updates, so winget's tracked version never moves)."
+        }
         $notApplicable += $id
     }
     elseif ($res -match 'different install technology') {
@@ -192,7 +338,12 @@ if (-not $NoChocoFallback -and $notApplicable.Count -gt 0 -and (Get-Command choc
     }
 }
 
-Write-Host '[winget] Packages listed above need attention - they are not transient failures.'
-# Still exit 0: the pass ran. These are per-package conditions reported in the
-# log, not a failure of the update run.
+$remaining = Get-PendingUpgrades
+if ($RetryFailed) { foreach ($key in @($remaining.Keys)) { if ($retryIds -notcontains $key) { $remaining.Remove($key) } } }
+ConvertTo-Json -InputObject @($remaining.Keys) | Set-Content -LiteralPath $retryPath -Encoding UTF8
+if ($remaining.Count -gt 0) {
+    Write-Host "[error] winget still has $($remaining.Count) pending package(s): $($remaining.Keys -join ', ')"
+    exit 1
+}
+Write-Host '[winget] All pending packages recovered on retry.'
 exit 0

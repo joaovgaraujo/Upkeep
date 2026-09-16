@@ -455,14 +455,31 @@ mod tests {
 
     #[test]
     fn matches_known_services_and_startup_items() {
-        assert_eq!(service_advice("WinDefend", "Microsoft Defender Antivirus Service").map(|e| e.advice), Some(Keep));
-        assert_eq!(service_advice("DiagTrack", "Connected User Experiences and Telemetry").map(|e| e.advice), Some(SafeOff));
-        assert_eq!(service_advice("com.docker.service", "Docker Desktop Service").map(|e| e.advice), Some(Optional));
         assert_eq!(
-            startup_advice("MicrosoftEdgeAutoLaunch_ABC", "msedge.exe --no-startup-window").map(|e| e.advice),
+            service_advice("WinDefend", "Microsoft Defender Antivirus Service").map(|e| e.advice),
+            Some(Keep)
+        );
+        assert_eq!(
+            service_advice("DiagTrack", "Connected User Experiences and Telemetry")
+                .map(|e| e.advice),
             Some(SafeOff)
         );
-        assert_eq!(startup_advice("OneDrive", "OneDrive.exe /background").map(|e| e.advice), Some(Optional));
+        assert_eq!(
+            service_advice("com.docker.service", "Docker Desktop Service").map(|e| e.advice),
+            Some(Optional)
+        );
+        assert_eq!(
+            startup_advice(
+                "MicrosoftEdgeAutoLaunch_ABC",
+                "msedge.exe --no-startup-window"
+            )
+            .map(|e| e.advice),
+            Some(SafeOff)
+        );
+        assert_eq!(
+            startup_advice("OneDrive", "OneDrive.exe /background").map(|e| e.advice),
+            Some(Optional)
+        );
         assert!(startup_advice("SomeUnknownThing", "x.exe").is_none());
     }
 

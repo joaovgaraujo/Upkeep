@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Installs a curated set of applications on a new PC using winget (or
     chocolatey as an opt-in alternative), driven by apps.json and named
@@ -52,10 +52,19 @@ param(
 
     [switch]$DryRun,
 
-    [switch]$PreferChoco
+    [switch]$PreferChoco,
+    [string]$RetryReport,
+    [switch]$NoRebootPrompt,
+    [string]$ResultFile
 )
 
 $ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+if ($RetryReport) {
+    $Apps = @((Get-Content -LiteralPath $RetryReport -Raw | ConvertFrom-Json) | Where-Object { $_.Status -in @('Failed','Deferred','Unavailable') } | ForEach-Object { $_.Slug })
+    $Preset = ''
+    if (-not $Apps.Count) { Write-Output 'No failed or deferred apps to retry.'; exit 0 }
+}
 
 # NOTE: $PSScriptRoot is not reliably populated while parameter default
 # values are being evaluated in Windows PowerShell 5.1 when the script
@@ -91,6 +100,8 @@ if ($DryRun) {
     if ($Catalog)      { $argList += @('-Catalog', "`"$Catalog`"") }
     if ($DryRun)      { $argList += '-DryRun' }
     if ($PreferChoco) { $argList += '-PreferChoco' }
+    if ($NoRebootPrompt) { $argList += '-NoRebootPrompt' }
+    if ($ResultFile) { $argList += @('-ResultFile', "`"$ResultFile`"") }
 
     try {
         $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList -Verb RunAs -PassThru -ErrorAction Stop
@@ -182,7 +193,7 @@ $chocoAvailable = [bool](Get-Command choco -ErrorAction SilentlyContinue)
 # On a fresh Windows install App Installer (winget) is often present but not
 # yet registered for the user until the Store gets around to it. Registering
 # it by family name is Microsoft's documented fix and needs no download.
-if (-not $wingetAvailable -and -not $DryRun) {
+if (-not $wingetAvailable -and -not $DryRun -and $wingetId -ne 'Microsoft.WSL') {
     Write-Output "winget not found -- trying to register App Installer..."
     try {
         Add-AppxPackage -RegisterByFamilyName -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' -ErrorAction Stop
@@ -228,7 +239,7 @@ function Invoke-Timed {
         $startArgs.RedirectStandardOutput = [IO.Path]::GetTempFileName()
         $startArgs.RedirectStandardError = [IO.Path]::GetTempFileName()
     }
-    $proc = Start-Process @startArgs
+    try { $proc = Start-Process @startArgs } catch { Write-Warning $_.Exception.Message; return 'launch-failed' }
     # Touching Handle before exit makes ExitCode available afterwards (PS 5.1).
     $null = $proc.Handle
     try {
@@ -275,7 +286,7 @@ function Install-WithWinget {
         '-e',
         '--accept-package-agreements',
         '--accept-source-agreements',
-        '--silent'
+        '--silent', '--disable-interactivity'
     ) + $sourceArgs
 
     return Invoke-Timed -FilePath 'winget' -ArgumentList $wingetArgs -TimeoutMin $appTimeoutMin
@@ -284,7 +295,22 @@ function Install-WithWinget {
 function Install-WithChoco {
     param([string]$ChocoId)
 
-    return Invoke-Timed -FilePath 'choco' -ArgumentList @('install', $ChocoId, '-y', '--no-progress') -TimeoutMin $appTimeoutMin
+    return Invoke-Timed -FilePath 'choco' -ArgumentList @('install', $ChocoId, '-y', '--no-progress', '--exit-when-reboot-detected') -TimeoutMin $appTimeoutMin
+}
+
+# Bootstrap independently: a blocked Store or failed download must not stop setup.
+if (-not $DryRun) {
+    foreach ($manager in @('winget', 'choco')) {
+        if (-not (Get-Command $manager -ErrorAction SilentlyContinue)) {
+            Write-Output "Preparing $manager (up to 10 minutes)..."
+            $bootstrap = Join-Path $PSScriptRoot 'steps\Initialize-PackageManager.ps1'
+            $code = Invoke-Timed powershell.exe @('-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$bootstrap`"", '-Manager', $manager) 10
+            if ($code -ne 0) { Write-Warning "$manager setup failed ($code); continuing with available installers." }
+            $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') + ";$env:LOCALAPPDATA\Microsoft\WindowsApps;$env:ProgramData\chocolatey\bin"
+        }
+    }
+    $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+    $chocoAvailable = [bool](Get-Command choco -ErrorAction SilentlyContinue)
 }
 
 # ---------------------------------------------------------------------------
@@ -341,7 +367,16 @@ Write-Output "Apps    : $($orderedSlugs.Count) requested"
 if ($DryRun) { Write-Output "Mode    : DRY RUN (no changes will be made)" }
 Write-Output ""
 
+$reportDir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
+New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+$reportPrefix = if ($DryRun) { 'preview-apps-' } else { 'apps-' }
+$reportPath = Join-Path $reportDir ($reportPrefix + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.json')
+Write-Output "Results: $reportPath"
+try { Start-Transcript -Path ($reportPath + '.log') -ErrorAction Stop | Out-Null } catch { Write-Warning "Transcript unavailable: $_" }
+$restartNeeded = $false
+$wslPrepared = $false
 foreach ($slug in $orderedSlugs) {
+    try {
     if (-not $catalogMap.ContainsKey($slug)) {
         Write-Output "[skip] $slug -- not found in catalog"
         $results.Add([pscustomobject]@{
@@ -353,20 +388,24 @@ foreach ($slug in $orderedSlugs) {
         continue
     }
 
+    if ($slug -eq 'ea-app' -or $catalogMap[$slug].winget -eq 'ElectronicArts.EADesktop') {
+        $results.Add([pscustomobject]@{ Slug=$slug; Name=$slug; Status='Deferred'; ExitCode='Install manually: this installer can restart Windows.' })
+        continue
+    }
     $entry = $catalogMap[$slug]
     $displayName = $entry.content
     $wingetId = $entry.winget
     $chocoId = $entry.choco
 
     $useChoco = $false
-    if ($PreferChoco -and $chocoAvailable -and $chocoId -and $chocoId -ne 'na') {
+    if (($PreferChoco -or -not $wingetAvailable -or $wingetId -eq 'na') -and $chocoAvailable -and $chocoId -and $chocoId -ne 'na') {
         $useChoco = $true
     }
 
     Write-Output "----------------------------------------"
     Write-Output "[$slug] $displayName"
 
-    if (-not $useChoco -and (-not $wingetId -or $wingetId -eq 'na')) {
+    if (-not $useChoco -and (-not $wingetId -or $wingetId -eq 'na' -or (-not $wingetAvailable -and -not $DryRun -and $wingetId -ne 'Microsoft.WSL'))) {
         Write-Output "  No winget id available and choco not selected/available -- skipping."
         $results.Add([pscustomobject]@{
             Slug     = $slug
@@ -380,7 +419,7 @@ foreach ($slug in $orderedSlugs) {
     # Already-installed check (winget only; choco has no cheap equivalent
     # here, so choco-path installs just proceed -- choco install is
     # idempotent and will report "already installed").
-    if (-not $useChoco -and $wingetId -and $wingetId -ne 'na') {
+    if (-not $DryRun -and -not $useChoco -and $wingetId -and $wingetId -ne 'na') {
         $alreadyInstalled = Test-WingetInstalled -WingetId $wingetId
         if ($alreadyInstalled) {
             Write-Output "  Already installed (winget id: $wingetId) -- skipping."
@@ -396,9 +435,17 @@ foreach ($slug in $orderedSlugs) {
 
     $skipReason = $null
     $skipStatus = 'Deferred'
+    $rebootPending = if ($DryRun) { $false } else { $restartNeeded -or (Test-PendingReboot) }
+    if (-not $DryRun -and -not $rebootPending -and -not $wslPrepared -and $wingetId -in @('Docker.DockerDesktop','Microsoft.WSL')) {
+        $wslScript = Join-Path $PSScriptRoot 'steps\Initialize-WSL.ps1'
+        $wslCode = Invoke-Timed powershell.exe @('-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$wslScript`"") 20
+        if ($wslCode -eq 3010 -or (Test-PendingReboot)) { $restartNeeded = $true; $rebootPending = $true }
+        elseif ($wslCode -ne 0) { throw "WSL prerequisites failed ($wslCode). Check virtualization support and Windows Update, then retry." }
+        else { $wslPrepared = $true; $rebootPending = Test-PendingReboot }
+    }
     if ($rebootPending -and $wingetId -and ($restartSensitiveIds | Where-Object { $wingetId -like $_ })) {
         $skipReason = 'Windows has a restart pending; this installer enables Windows features and would hang. Restart, then install it.'
-    } elseif ($wingetId -and $downloadProbes.ContainsKey($wingetId) -and -not (Test-UrlReachable $downloadProbes[$wingetId])) {
+    } elseif (-not $DryRun -and $wingetId -and $downloadProbes.ContainsKey($wingetId) -and -not (Test-UrlReachable $downloadProbes[$wingetId])) {
         $skipReason = "download server $($downloadProbes[$wingetId]) is unreachable from this network."
         $skipStatus = 'Unavailable'
     }
@@ -409,10 +456,15 @@ foreach ($slug in $orderedSlugs) {
             Name     = $displayName
             Status   = $skipStatus
             ExitCode = ''
+            RebootRequired = ($skipStatus -eq 'Deferred')
         })
         continue
     }
 
+    if (-not $DryRun -and $wingetId -eq 'Microsoft.WSL' -and $wslPrepared) {
+        $results.Add([pscustomobject]@{ Slug=$slug; Name=$displayName; Status='Installed'; ExitCode=0 })
+        continue
+    }
     if ($DryRun) {
         if ($useChoco) {
             Write-Output "  [dry-run] Would run: choco install $chocoId -y --no-progress"
@@ -451,15 +503,21 @@ foreach ($slug in $orderedSlugs) {
         # knows a chocolatey package for this app, try that before giving up.
         # (-PreferChoco is the opposite direction: choco FIRST by choice.)
         # A timeout is not retried: the same blocker would stall choco too.
-        if ($exitCode -ne 0 -and $exitCode -ne $TimedOut -and $chocoAvailable -and $chocoId -and $chocoId -ne 'na') {
+        if ($exitCode -notin @(0,3010,1641) -and $exitCode -ne $TimedOut -and $chocoAvailable -and $chocoId -and $chocoId -ne 'na') {
             Write-Output "  winget failed (exit code $exitCode) -- retrying via choco: $chocoId"
             $exitCode = Install-WithChoco -ChocoId $chocoId
             $installedVia = 'choco (winget fallback)'
         }
     }
 
-    if ($exitCode -eq 0) {
-        Write-Output "  OK (exit code 0, via $installedVia)"
+    if ($exitCode -notin @(0,3010,1641) -and ($restartSensitiveIds | Where-Object { $wingetId -like $_ }) -and (Test-PendingReboot)) {
+        $results.Add([pscustomobject]@{ Slug=$slug; Name=$displayName; Status='Deferred'; ExitCode=$exitCode; RebootRequired=$true })
+        $restartNeeded = $true
+        continue
+    }
+    if ($exitCode -eq 3010) { $restartNeeded = $true }
+    if ($exitCode -in @(0,3010)) {
+        Write-Output "  OK (exit code $exitCode, via $installedVia). Code 3010 means restart manually when ready."
         $results.Add([pscustomobject]@{
             Slug     = $slug
             Name     = $displayName
@@ -483,6 +541,24 @@ foreach ($slug in $orderedSlugs) {
             ExitCode = $exitCode
         })
     }
+    } catch {
+        Write-Warning "${slug} failed: $($_.Exception.Message)"
+        $results.Add([pscustomobject]@{ Slug=$slug; Name=$slug; Status='Failed'; ExitCode=$_.Exception.Message })
+    } finally {
+        foreach ($result in $results) {
+            $next = switch ($result.Status) {
+                'Failed' { 'Check installer output and network, then use Retry failed installs.' }
+                'Deferred' { if ($result.RebootRequired) { 'Use the restart prompt to continue now or after a later restart.' } else { 'This installer requires manual attention; it is not queued for automatic continuation.' } }
+                'Unavailable' { 'Download server is unreachable. Retry on a working connection.' }
+                'NotInCatalog' { 'Choose an app from the current catalog.' }
+                'Installed' { if ($result.ExitCode -eq 3010) { 'Installed. Restart manually when convenient.' } else { 'No action needed.' } }
+                default { 'No action needed.' }
+            }
+            $result | Add-Member -NotePropertyName NextAction -NotePropertyValue $next -Force
+        }
+        ConvertTo-Json -InputObject @($results.ToArray()) -Depth 5 | Set-Content -LiteralPath $reportPath -Encoding UTF8
+        if ($ResultFile) { Copy-Item -LiteralPath $reportPath -Destination $ResultFile -Force }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -498,7 +574,7 @@ $skipped = @($results | Where-Object { $_.Status -eq 'Skipped' })
 $dryRunItems = @($results | Where-Object { $_.Status -eq 'DryRun' })
 $failed = @($results | Where-Object { $_.Status -in @('Failed', 'NotInCatalog') })
 
-$results | Format-Table -AutoSize -Property Slug, Name, Status, ExitCode | Out-String | Write-Output
+$results | Format-Table -AutoSize -Wrap -Property Slug, Status, ExitCode, NextAction | Out-String | Write-Output
 
 Write-Output "Installed : $($installed.Count)"
 Write-Output "Skipped   : $($skipped.Count) (already present)"
@@ -511,6 +587,15 @@ if ($DryRun) {
 }
 Write-Output "Failed    : $($failed.Count)"
 
+if (-not $DryRun -and -not $NoRebootPrompt) {
+    try {
+        . (Join-Path $PSScriptRoot 'steps\Setup-Resume.ps1')
+        $rebootApps = @(Get-RebootApps @($results.ToArray()))
+        $restartNeeded = $restartNeeded -or (Test-PendingReboot)
+        Request-SetupResume -Root $PSScriptRoot -Apps $rebootApps -Catalog $Catalog -PreferChoco:$PreferChoco -RestartRequired:$restartNeeded
+    } catch { Write-Warning "Could not arrange continuation; no restart requested: $_" }
+}
+try { Stop-Transcript -ErrorAction Stop | Out-Null } catch {}
 if ($failed.Count -gt 0) {
     Write-Output ""
     Write-Output "Failed items:"

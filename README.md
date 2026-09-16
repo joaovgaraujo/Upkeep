@@ -30,6 +30,29 @@ needs it. That has consequences worth understanding:
 
 ## Defaults you may want to change
 
+- **Interface defaults follow Windows.** A new settings file uses the Windows
+  display language (English or Portuguese, with English fallback) and the
+  Windows accessibility text size. Use **Appearance & language** to change
+  these; **Follow Windows** restores automatic language selection. Existing
+  saved language choices are preserved. Navigation and cards adapt to window
+  size and zoom; wide data tables can scroll horizontally.
+
+- **EA updates are manual.** An EA installer initiated an unwanted Windows
+  restart during a winget upgrade. Upkeep now enforces an EA blocking pin in
+  winget and an `ea-app` pin in Chocolatey before updating applications. It
+  also stops automatically launching or reinstalling EA. If either guard
+  fails, the run stops. Update EA manually when you can tolerate a restart.
+- **Windows Update has one owner.** Topgrade's `system` step is disabled;
+  the explicit Windows Update step uses `-IgnoreReboot`, and Topgrade's
+  `updates_auto_reboot` is explicitly `"no"`. These controls do not override
+  independent Windows restart schedules or every third-party installer.
+- **Independent clients run together.** Store, JDownloader and Steam run in
+  up to three hidden workers after package managers and Windows servicing
+  finish. Each worker has a timeout; results and output are retained in the
+  run log. Package managers stay sequential to avoid installer contention.
+- **Failed steps now report failure.** Topgrade errors and unresolved winget
+  upgrades appear as errors in the summary and produce a nonzero engine exit.
+
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different
   reasons:
@@ -61,8 +84,9 @@ half ready, instead of hanging on the first thing that is missing:
   box instead of the window silently never appearing.
 - **Restart pending (Windows Update).** The few winutil tweaks that go
   through Windows servicing (Recall removal, component cleanup, reserved
-  storage, optional features) are deferred to a one-shot task that runs at the
-  next sign-in; everything else runs now. Installers that enable Windows
+  storage, optional features) are deferred. A prompt offers restart now,
+  continuation after a later manual restart, or cancellation. Only approved
+  continuation runs after the next restart and sign-in. Installers that enable Windows
   features (Docker Desktop, WSL and WSL distros) are skipped with a message
   until you restart.
 - **Nothing waits forever.** winutil (`WinutilTimeoutMin`, default 20), each
@@ -73,9 +97,16 @@ half ready, instead of hanging on the first thing that is missing:
   answer; Windows Update and the PC maker's updater still provide drivers.
 - **Intel Thunderbolt driver on USB4 controllers.** SDIO installs Intel's
   standalone Thunderbolt driver on controllers meant for the Windows inbox
-  USB4 driver, which disables the port. `Repair-Usb4Driver.ps1` runs after
-  SDIO (setup and the Drivers button), backs that package up and removes it.
-- **winget missing** on a new install: App Installer is registered first.
+  USB4 driver, which disables the port. Setup now leaves driver replacement
+  off by default and does not automatically apply the machine-specific
+  `Repair-Usb4Driver.ps1`; that tool remains available separately.
+- **winget missing** on a new install: App Installer is registered first, then
+  Microsoft's WinGet repair module is tried. Chocolatey is prepared independently
+  and used as a catalog-based fallback. Failures are recorded per app.
+- **Preview, retry and recovery:** see [1.5.0 release notes](docs/RELEASE-1.5.0.md)
+  for conservative defaults, failed-only retries, reports and registry rollback.
+  [1.5.1 adds opt-in restart continuation](docs/RELEASE-1.5.1.md), including
+  WSL feature preparation before Docker installation.
 
 ## Optional: startup timings
 
@@ -102,7 +133,7 @@ Requires a Rust toolchain (MSVC) and, for the installer, Inno Setup 6.
 ```powershell
 cd gui
 cargo build --release          # produces gui\target\release\Upkeep.exe
-cargo test --release           # 58 tests
+cargo test --release           # GUI and engine tests
 
 .\Build-Portable.ps1           # dist\Upkeep-Portable.zip + dist\Upkeep\
 .\Build-Installer.ps1          # dist\Upkeep-Setup.exe

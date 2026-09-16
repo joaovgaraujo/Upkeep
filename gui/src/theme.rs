@@ -343,7 +343,7 @@ pub fn apply(ctx: &egui::Context) {
 /// Text-size choices offered in the UI, as egui zoom factors. Zoom scales
 /// fonts *and* spacing/widget hit-boxes together, which is what you want on a
 /// small screen - bumping only the font sizes leaves buttons cramped.
-pub const UI_SCALES: [f32; 5] = [1.0, 1.15, 1.3, 1.5, 1.75];
+pub const UI_SCALES: [f32; 7] = [0.8, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0];
 
 /// Clamp an arbitrary persisted value into the supported range.
 pub fn clamp_scale(scale: f32) -> f32 {

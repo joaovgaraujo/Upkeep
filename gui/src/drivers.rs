@@ -109,8 +109,9 @@ static VERSION_SPLIT_RE: LazyLock<Regex> =
 /// `Original Name: nvhda.inf` can't be mistaken for it.
 static OEM_INF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^oem\d+\.inf$").unwrap());
 /// Class GUID is shape-stable; the class NAME is the line above it.
-static CLASS_GUID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\{[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}$").unwrap());
+static CLASS_GUID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\{[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\}$").unwrap()
+});
 /// `<date> <dotted version>`, with the separator and field order both
 /// localized (06/13/2025 en-US, 13/06/2025 pt-BR, 13.06.2025 de-DE). The date
 /// is display-only, so it is kept verbatim rather than disambiguated.
@@ -255,7 +256,10 @@ Nome do Signat\u{e1}rio: Microsoft Windows Hardware Compatibility Publisher
 ";
         let got = parse_pnputil_output(pt);
         assert_eq!(got.len(), 1, "localized block should still yield a driver");
-        assert_eq!(got[0].published_name, "oem12.inf", "must not pick nvhda.inf");
+        assert_eq!(
+            got[0].published_name, "oem12.inf",
+            "must not pick nvhda.inf"
+        );
         assert_eq!(got[0].class_name, "Controladores de som, v\u{ed}deo e jogo");
         assert_eq!(got[0].driver_version, "1.4.3.2");
         assert_eq!(got[0].driver_date, "13/06/2025");
