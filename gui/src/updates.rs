@@ -11,6 +11,37 @@ pub struct UpdateItem {
     pub selected: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct UpdatePlan {
+    pub items: Vec<UpdateItem>,
+    pub windows: bool,
+    pub store: bool,
+    pub steam: bool,
+    pub other_apps: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub only_ids: Option<Vec<String>>,
+}
+
+impl UpdatePlan {
+    pub fn selected_ids(&self) -> Vec<String> {
+        self.items
+            .iter()
+            .filter(|item| item.selected)
+            .map(|item| item.id.clone())
+            .collect()
+    }
+    pub fn can_confirm(&self) -> bool {
+        !self.loading
+            && self.error.is_none()
+            && (self.items.iter().any(|item| item.selected)
+                || self.windows
+                || self.store
+                || self.steam
+                || self.other_apps)
+    }
+}
+
 pub fn inventory(root: &Path) -> Result<Vec<UpdateItem>, String> {
     let script = root.join("steps/Update-WingetApps.ps1");
     let text = crate::system::run_hidden(
@@ -41,6 +72,16 @@ pub fn load_ignored() -> Result<Vec<String>, String> {
         return Ok(Vec::new());
     }
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())
+}
+
+pub fn load_failed() -> Result<Vec<String>, String> {
+    let path = ignore_path()
+        .parent()
+        .unwrap()
+        .join("Reports/winget-failed.json");
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("Could not read failed-app report: {e}"))?;
     serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())
 }
 
@@ -84,6 +125,39 @@ pub fn result_details<'a>(lines: impl Iterator<Item = &'a String>) -> Vec<String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn confirmation_blocks_loading_errors_and_empty_selections() {
+        let mut plan = super::UpdatePlan::default();
+        assert!(!plan.can_confirm());
+        plan.store = true;
+        assert!(plan.can_confirm());
+        plan.loading = true;
+        assert!(!plan.can_confirm());
+        plan.loading = false;
+        plan.error = Some("Inventory failed".into());
+        assert!(!plan.can_confirm());
+    }
+
+    #[test]
+    fn confirmation_uses_only_checked_ids_and_other_providers_are_opt_in() {
+        let item = |id: &str, selected| super::UpdateItem {
+            id: id.into(),
+            name: id.into(),
+            current: "1".into(),
+            available: "2".into(),
+            selected,
+        };
+        let plan = super::UpdatePlan {
+            items: vec![
+                item("Example.Checked", true),
+                item("Example.Unchecked", false),
+            ],
+            ..Default::default()
+        };
+        assert!(plan.can_confirm());
+        assert_eq!(plan.selected_ids(), vec!["Example.Checked"]);
+        assert!(!plan.other_apps);
+    }
     #[test]
     fn mixed_results_keep_success_and_actionable_failure() {
         let lines = [

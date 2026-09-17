@@ -8,9 +8,10 @@ param(
     [ValidateRange(1,7200)][int]$TimeoutSec = 3900
 )
 $ErrorActionPreference = 'Stop'
+$skipJDownloader = if ($env:DASHBOARD_SKIP_OTHER_APPS -eq '1') { '1' } else { $env:DASHBOARD_SKIP_APPS }
 $specs = @(
     @{ Name='STORE'; Tag='store'; Script='Update-StoreApps.ps1'; Skip=$env:DASHBOARD_SKIP_STORE },
-    @{ Name='JD'; Tag='jdownloader'; Script='Update-JDownloader.ps1'; Skip=$env:DASHBOARD_SKIP_APPS },
+    @{ Name='JD'; Tag='jdownloader'; Script='Update-JDownloader.ps1'; Skip=$skipJDownloader },
     @{ Name='STEAM'; Tag='steam'; Script='Update-SteamGames.ps1'; Skip=$env:DASHBOARD_SKIP_STEAM }
 )
 $results = [ordered]@{ STORE='skipped'; JD='skipped'; STEAM='skipped' }
