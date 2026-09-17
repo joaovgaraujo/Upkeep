@@ -758,5 +758,21 @@
         "choco": "peazip",
         "description": "Create and extract compressed archives.",
         "description_pt": "Gerenciamento de arquivos compactados; alternativa ao 7-Zip."
+    },
+    "displaymagician": {
+        "content": "DisplayMagician",
+        "category": "Utilities",
+        "winget": "terrymacdonald.DisplayMagician",
+        "choco": "na",
+        "description": "Open-source display and audio profiles for switching between work and gaming setups.",
+        "description_pt": "Perfis de monitores e áudio, com código aberto, para alternar entre trabalho e jogos."
+    },
+    "luminosity": {
+        "content": "Luminosity App",
+        "category": "Utilities",
+        "winget": "msstore:9PNVFD1CM3M5",
+        "choco": "na",
+        "description": "Software dimming filter for nighttime use, including below the monitor hardware minimum.",
+        "description_pt": "Filtro de escurecimento por software para uso noturno, inclusive abaixo do mínimo físico do monitor."
     }
 }
