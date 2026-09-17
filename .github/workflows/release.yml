@@ -148,7 +148,7 @@ jobs:
         with:
           draft: false
           generate_release_notes: true
-          body_path: docs/RELEASE-1.5.3.md
+          body_path: docs/RELEASE-1.5.5.md
           files: |
             dist/Upkeep-Setup.exe
             dist/Upkeep-Portable.zip

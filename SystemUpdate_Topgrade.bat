@@ -41,6 +41,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem Selected app runs deliberately bypass other update providers.
+if defined UPKEEP_SELECTED_IDS (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-SelectedApps.ps1"
+    set "SELECTED_RC=!errorLevel!"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Manage-EngineLock.ps1" -Action Release
+    exit /b !SELECTED_RC!
+)
+
 echo.
 echo ========================================
 echo   System Update via Topgrade

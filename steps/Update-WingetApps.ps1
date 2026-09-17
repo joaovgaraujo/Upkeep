@@ -69,10 +69,20 @@ param(
     [string]$LogFile,
     [switch]$NoChocoFallback,
     [switch]$NoDeelevatedRetry,
-    [switch]$RetryFailed
+    [switch]$RetryFailed,
+    [switch]$InventoryOnly
 )
 
 $ErrorActionPreference = 'Continue'
+$ignorePath = Join-Path $env:LOCALAPPDATA 'Upkeep\winget-ignore.json'
+$ignoredIds = @()
+if (Test-Path -LiteralPath $ignorePath) { $ignoredIds = @((Get-Content -LiteralPath $ignorePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)) }
+$selectedIds = @()
+$selectionMode = -not [string]::IsNullOrWhiteSpace($env:UPKEEP_SELECTED_IDS)
+if ($selectionMode) {
+    $selectedIds = @(($env:UPKEEP_SELECTED_IDS | ConvertFrom-Json -ErrorAction Stop))
+    foreach ($id in $selectedIds) { if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9._+\-]+$') { throw 'Invalid selected package ID.' } }
+}
 
 . (Join-Path $PSScriptRoot 'Deelevate.ps1')
 
@@ -134,11 +144,21 @@ function Get-PendingUpgrades {
         $cur = $l.Substring($verPos, $availPos - $verPos).Trim()
         $end = if ($srcPos -gt $availPos -and $l.Length -gt $srcPos) { $srcPos - $availPos } else { $l.Length - $availPos }
         $avail = $l.Substring($availPos, $end).Trim()
-        if ($id -match '^[A-Za-z0-9][A-Za-z0-9._+\-]+$' -and $avail -notmatch '\s') { $result[$id] = [pscustomobject]@{ Current = $cur; Available = $avail } }
+        if ($id -match '^[A-Za-z0-9][A-Za-z0-9._+\-]+$' -and $avail -notmatch '\s') { $result[$id] = [pscustomobject]@{ Id = $id; Name = $l.Substring(0, $idPos).Trim(); Current = $cur; Available = $avail } }
     }
     # Never individually retry the installer that caused an unsolicited reboot.
     $result.Remove('ElectronicArts.EADesktop')
+    foreach ($key in @($result.Keys)) {
+        if ($ignoredIds -contains $key -or ($selectionMode -and $selectedIds -notcontains $key)) { $result.Remove($key) }
+    }
     $result
+}
+
+if ($InventoryOnly) {
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    try { ConvertTo-Json -InputObject @((Get-PendingUpgrades).Values | Sort-Object Name) -Compress }
+    catch { Write-Output $_.Exception.Message; exit 1 }
+    exit 0
 }
 
 # Which ARP hive is this app registered in? HKCU means a user-scope install,
@@ -194,7 +214,7 @@ Write-Host "[winget] $($before.Count) package(s) have upgrades available."
 
 Write-Host '[winget] Upgrading winget packages silently...'
 $upgradeExit = 0
-if ($RetryFailed) {
+if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0) {
     $output = @()
     foreach ($id in @($before.Keys)) {
         if ($id -eq 'ElectronicArts.EADesktop') { continue }
@@ -226,6 +246,7 @@ if ($stuck.Count -eq 0) {
         Write-Host "[error] winget upgrade returned $upgradeExit; see the installer output."
         exit 1
     }
+    Write-Host "[result] WinGet: $($upgraded.Count) updated; 0 pending."
     Write-Host '[winget] All pending winget upgrades applied.'
     exit 0
 }
@@ -240,17 +261,17 @@ foreach ($id in $stuck) {
 
     # -1978335107 (0x8A15007D): winget refuses to touch a user-scope package
     # while elevated. Our elevation is the whole problem, so drop it and retry.
-    if ($code -eq -1978335107 -or $res -match 'user scope cannot be uninstalled when running with administrator') {
+    if (Test-RequiresNormalUser -ExitCode $code -Output $res) {
         if ($NoDeelevatedRetry) {
             Write-Host "[winget]   $id : user-scope package and we are elevated; unelevated retry disabled."
         } elseif (-not (Test-Elevated)) {
             # Already unelevated and still refused: retrying changes nothing.
             Write-Host "[winget]   $id : winget reports a user-scope conflict, but this run is not elevated."
         } else {
-            Write-Host "[winget]   $id : user-scope package refused while elevated - retrying unelevated..."
+            Write-Host "[winget]   $id : installer requires your normal Windows user; retrying without administrator rights..."
             $deelev = Invoke-Deelevated -Command "winget upgrade --id $id --exact --include-unknown --silent --disable-interactivity --accept-source-agreements --accept-package-agreements"
             if ($null -eq $deelev) {
-                Write-Host "[winget]   $id : could not run unelevated (scheduled task unavailable) - still pending."
+                Write-Host "[winget]   $id : normal-user worker unavailable. Update this app from a non-administrator terminal. Other updates continue."
             } else {
                 $res = $deelev.Output
                 $code = $deelev.ExitCode
@@ -258,8 +279,12 @@ foreach ($id in $stuck) {
                     Write-Host "[winget]   $id : upgraded unelevated."
                     continue
                 }
+                Write-Host "[winget]   $id : $($deelev.Status) - $res"
             }
         }
+        # Do not force an installer that explicitly rejects elevation, or start
+        # a fallback while an unelevated installer might still be running.
+        continue
     }
 
     # -1978335145: a portable package's exe or shim no longer matches what
@@ -339,11 +364,14 @@ if (-not $NoChocoFallback -and $notApplicable.Count -gt 0 -and (Get-Command choc
 }
 
 $remaining = Get-PendingUpgrades
+foreach ($key in @($remaining.Keys)) { if (-not $before.ContainsKey($key)) { $remaining.Remove($key) } }
 if ($RetryFailed) { foreach ($key in @($remaining.Keys)) { if ($retryIds -notcontains $key) { $remaining.Remove($key) } } }
 ConvertTo-Json -InputObject @($remaining.Keys) | Set-Content -LiteralPath $retryPath -Encoding UTF8
 if ($remaining.Count -gt 0) {
+    Write-Host "[result] WinGet: $($before.Count - $remaining.Count) updated; $($remaining.Count) still pending. Successful updates were kept."
     Write-Host "[error] winget still has $($remaining.Count) pending package(s): $($remaining.Keys -join ', ')"
     exit 1
 }
 Write-Host '[winget] All pending packages recovered on retry.'
+Write-Host "[result] WinGet: $($before.Count) updated; 0 pending after retries."
 exit 0

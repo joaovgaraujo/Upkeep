@@ -86,8 +86,9 @@ impl SummaryData {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SkipFlags {
+    pub selected_ids: Option<Vec<String>>,
     pub skip_winupdate: bool,
     pub skip_store: bool,
     pub skip_apps: bool,
@@ -107,6 +108,7 @@ pub enum EngineExit {
 }
 
 pub enum AppEvent {
+    UpdateInventory(Result<Vec<crate::updates::UpdateItem>, String>),
     LogLine(String),
     CategoryStatus(Category, Status),
     Summary(SummaryData),
@@ -233,6 +235,11 @@ pub fn spawn_engine(
         // null stdin above and would otherwise write "ERROR: Input
         // redirection is not supported" to stderr, straight into our log.
         cmd.env("DASHBOARD_RUN", "1");
+        if let Some(ids) = &skip.selected_ids {
+            cmd.env("UPKEEP_SELECTED_IDS", serde_json::to_string(ids).unwrap());
+        } else {
+            cmd.env_remove("UPKEEP_SELECTED_IDS");
+        }
 
         for (key, skip_it) in [
             ("DASHBOARD_SKIP_WINUPDATE", skip.skip_winupdate),

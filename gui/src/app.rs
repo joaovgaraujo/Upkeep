@@ -142,6 +142,11 @@ pub struct DashboardApp {
     bundle_apps: Vec<BundleApp>,
 
     log_lines: VecDeque<String>,
+    update_items: Vec<crate::updates::UpdateItem>,
+    updates_loading: bool,
+    updates_checked: bool,
+    updates_error: Option<String>,
+    selected_update_ids: Option<Vec<String>>,
 
     summary: Option<SummaryData>,
     engine_exit: Option<EngineExit>,
@@ -326,6 +331,11 @@ impl DashboardApp {
             bundle_preset: None,
             bundle_apps,
             log_lines: VecDeque::new(),
+            update_items: Vec::new(),
+            updates_loading: false,
+            updates_checked: false,
+            updates_error: None,
+            selected_update_ids: None,
             summary: None,
             engine_exit: None,
             toast_sent: false,
@@ -507,6 +517,20 @@ impl DashboardApp {
                     self.drivers = list;
                     self.drivers_loading = false;
                     self.drivers_error = None;
+                }
+                AppEvent::UpdateInventory(result) => {
+                    self.updates_loading = false;
+                    self.updates_checked = true;
+                    match result {
+                        Ok(items) => {
+                            self.update_items = items;
+                            self.updates_error = None;
+                        }
+                        Err(e) => {
+                            self.update_items.clear();
+                            self.updates_error = Some(e);
+                        }
+                    }
                 }
                 AppEvent::InstalledApps(list) => {
                     self.installed_apps = list;
@@ -828,6 +852,7 @@ impl DashboardApp {
             self.last_output = Some(Instant::now());
 
             let skip = SkipFlags {
+                selected_ids: self.selected_update_ids.take(),
                 skip_winupdate: !self.cat_windows_update,
                 skip_store: !self.cat_store,
                 skip_apps: !self.cat_apps,
@@ -1734,6 +1759,103 @@ impl DashboardApp {
         });
     }
 
+    fn check_updates(&mut self, ctx: &egui::Context) {
+        if self.updates_loading || self.is_running {
+            return;
+        }
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        self.updates_loading = true;
+        self.updates_error = None;
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = crate::updates::inventory(&root);
+            let _ = tx.send(AppEvent::UpdateInventory(result));
+            ctx.request_repaint();
+        });
+    }
+
+    fn draw_update_picker(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let pt = self.lang == Lang::PtBr;
+        if self.updates_loading {
+            ui.spinner();
+            ui.label(if pt {
+                "Verificando apps WinGet..."
+            } else {
+                "Checking WinGet apps..."
+            });
+        }
+        if let Some(error) = &self.updates_error {
+            ui.colored_label(theme::status_error(), error);
+        }
+        ui.label(if pt { "Selecione apps WinGet abaixo. Windows, Store e outros atualizadores usam as categorias mais abaixo." } else { "Select WinGet apps below. Windows, Store and other updaters use the categories further down." });
+        let mut ignore = None;
+        let enabled = !self.is_running && !self.updates_loading;
+        ui.add_enabled_ui(enabled, |ui| {
+            if self.updates_checked && self.updates_error.is_none() {
+                if self.update_items.is_empty() { ui.label(if pt { "Nenhuma atualização WinGet elegível encontrada." } else { "No eligible WinGet updates found." }); }
+                else {
+                    ui.horizontal(|ui| {
+                        if ui.button(if pt { "Selecionar todos" } else { "Select all" }).clicked() { for item in &mut self.update_items { item.selected = true; } }
+                        if ui.button(if pt { "Limpar seleção" } else { "Clear selection" }).clicked() { for item in &mut self.update_items { item.selected = false; } }
+                    });
+                    egui::ScrollArea::vertical().id_salt("update_picker").max_height(240.0).show(ui, |ui| {
+                        for item in &mut self.update_items {
+                            ui.push_id(&item.id, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.checkbox(&mut item.selected, format!("{}  {} → {}", item.name, item.current, item.available)).on_hover_text(&item.id);
+                                    if ui.small_button(if pt { "Ignorar" } else { "Ignore" }).clicked() { ignore = Some(item.id.clone()); }
+                                });
+                            });
+                        }
+                    });
+                    let ids: Vec<_> = self.update_items.iter().filter(|i| i.selected).map(|i| i.id.clone()).collect();
+                    let label = if pt { format!("Atualizar {} apps selecionados", ids.len()) } else { format!("Update {} selected apps", ids.len()) };
+                    if ui.add_enabled(!ids.is_empty(), egui::Button::new(label)).clicked() {
+                        self.selected_update_ids = Some(ids);
+                        self.cat_apps = true;
+                        self.cat_windows_update = false;
+                        self.cat_store = false;
+                        self.cat_steam = false;
+                        self.start_run(ctx, false);
+                        self.updates_checked = false;
+                    }
+                }
+            }
+            match crate::updates::load_ignored() {
+                Ok(mut ignored) => {
+                    if let Some(id) = ignore.take() {
+                        if !ignored.contains(&id) { ignored.push(id.clone()); }
+                        match crate::updates::save_ignored(&ignored) {
+                            Ok(()) => self.update_items.retain(|i| i.id != id),
+                            Err(e) => self.updates_error = Some(e),
+                        }
+                    }
+                    if !ignored.is_empty() {
+                        ui.collapsing(if pt { "Apps WinGet ignorados" } else { "Ignored WinGet apps" }, |ui| {
+                            ui.label(if pt { "Ignorados nas atualizações WinGet do Upkeep, até você removê-los desta lista." } else { "Skipped by Upkeep's WinGet updates until removed from this list." });
+                            let mut remove = None;
+                            for id in &ignored {
+                                ui.horizontal(|ui| { ui.label(id); if ui.small_button(if pt { "Restaurar" } else { "Restore" }).clicked() { remove = Some(id.clone()); } });
+                            }
+                            if let Some(id) = remove {
+                                ignored.retain(|i| i != &id);
+                                match crate::updates::save_ignored(&ignored) {
+                                    Ok(()) => self.check_updates(ctx),
+                                    Err(e) => self.updates_error = Some(e),
+                                }
+                            }
+                        });
+                    }
+                }
+                Err(e) => { ui.colored_label(theme::status_error(), format!("Ignore list: {e}")); }
+            }
+        });
+        ui.separator();
+    }
+
     fn open_update_review(&mut self, mode: &str) {
         let Some(root) = self.root.clone() else {
             return;
@@ -1772,14 +1894,14 @@ impl DashboardApp {
                     .add_enabled(
                         !self.is_running,
                         egui::Button::new(if self.lang == Lang::PtBr {
-                            "Ver atualizações de apps"
+                            "Verificar atualizações"
                         } else {
-                            "Preview app updates"
+                            "Check for updates"
                         }),
                     )
                     .clicked()
                 {
-                    self.open_update_review("Preview");
+                    self.check_updates(ctx);
                 }
                 if ui
                     .add_enabled(
@@ -1795,6 +1917,7 @@ impl DashboardApp {
                     self.open_update_review("RetryUpdates");
                 }
             });
+            self.draw_update_picker(ui, ctx);
             if ui
                 .button(if self.lang == Lang::PtBr {
                     "Gerenciar continuação após reiniciar"
@@ -1825,6 +1948,7 @@ impl DashboardApp {
             })
             .min_size(egui::vec2(ui.available_width(), 48.0));
             if ui.add_enabled(run_enabled, run_button).clicked() {
+                self.selected_update_ids = None;
                 self.start_run(ctx, false);
             }
 
@@ -2007,6 +2131,17 @@ impl DashboardApp {
                     .inner_margin(egui::Margin::same(14))
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new(title).size(17.0).strong().color(fg));
+                        let details = crate::updates::result_details(self.log_lines.iter());
+                        if !details.is_empty() {
+                            egui::ScrollArea::vertical()
+                                .id_salt("result_details")
+                                .max_height(220.0)
+                                .show(ui, |ui| {
+                                    for detail in details {
+                                        ui.label(detail);
+                                    }
+                                });
+                        }
                         if !had_summary {
                             for line in self
                                 .log_lines
@@ -2087,6 +2222,7 @@ impl DashboardApp {
                         // died or hung early in the run. This *is* the
                         // scary case worth calling out distinctly.
                         EngineExit::Stopped => t.status_engine_no_summary.to_string(),
+                        EngineExit::Code(_) if had_summary => completed(true),
                         EngineExit::Code(code) => i18n::status_failed(self.lang, code),
                     }
                 } else {
@@ -2414,6 +2550,10 @@ impl DashboardApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                for detail in crate::updates::result_details(self.log_lines.iter()) {
+                    ui.label(detail);
+                }
+                ui.add_space(8.0);
                 match &self.summary {
                     None => {
                         let message = if self.engine_exit.is_some() {
@@ -4477,6 +4617,16 @@ mod tests {
                     app.tasks_fetched = true;
                     app.services_fetched = true;
                     app.autostart_fetched = true;
+                    if page == Page::Update {
+                        app.updates_checked = true;
+                        app.update_items = vec![crate::updates::UpdateItem {
+                            id: "Microsoft.VisualStudioCode".into(),
+                            name: "Microsoft Visual Studio Code (User)".into(),
+                            current: "1.137.0".into(),
+                            available: "1.138.0".into(),
+                            selected: true,
+                        }];
+                    }
                     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
                     app.bundle_apps = load_bundle(repo, None).unwrap();
                     app.presets = discover_presets(&repo.join("presets"));
