@@ -12,6 +12,7 @@ pub mod i18n;
 pub mod optimize;
 pub mod pins;
 pub mod reboot;
+pub mod self_update;
 pub mod settings;
 pub mod system;
 pub mod theme;

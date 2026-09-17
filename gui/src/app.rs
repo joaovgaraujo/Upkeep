@@ -149,6 +149,9 @@ pub struct DashboardApp {
     selected_update_ids: Option<Vec<String>>,
     update_plan: Option<crate::updates::UpdatePlan>,
     run_other_apps: bool,
+    upkeep_check_started: bool,
+    upkeep_check_loading: bool,
+    upkeep_release: Option<Result<Option<crate::self_update::ReleaseCheck>, String>>,
 
     summary: Option<SummaryData>,
     engine_exit: Option<EngineExit>,
@@ -340,6 +343,9 @@ impl DashboardApp {
             selected_update_ids: None,
             update_plan: None,
             run_other_apps: false,
+            upkeep_check_started: false,
+            upkeep_check_loading: false,
+            upkeep_release: None,
             summary: None,
             engine_exit: None,
             toast_sent: false,
@@ -521,6 +527,10 @@ impl DashboardApp {
                     self.drivers = list;
                     self.drivers_loading = false;
                     self.drivers_error = None;
+                }
+                AppEvent::UpkeepRelease(result) => {
+                    self.upkeep_check_loading = false;
+                    self.upkeep_release = Some(result);
                 }
                 AppEvent::UpdateInventory(result) => {
                     if let Some(plan) = self.update_plan.as_mut().filter(|p| p.loading) {
@@ -1498,6 +1508,9 @@ impl DashboardApp {
         theme::sync(ctx);
         self.track_ui_scale(ctx);
         self.drain_events();
+        if !self.upkeep_check_started && self.root.is_some() {
+            self.check_upkeep_release(ctx);
+        }
 
         if self.is_running {
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -1594,6 +1607,128 @@ fn centered_column(ui: &mut egui::Ui, preferred_w: f32, add: impl FnOnce(&mut eg
 }
 
 impl DashboardApp {
+    fn check_upkeep_release(&mut self, ctx: &egui::Context) {
+        if self.upkeep_check_loading {
+            return;
+        }
+        self.upkeep_check_started = true;
+        self.upkeep_check_loading = true;
+        self.upkeep_release = None;
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = crate::self_update::check();
+            let _ = tx.send(AppEvent::UpkeepRelease(result));
+            ctx.request_repaint();
+        });
+    }
+
+    fn draw_upkeep_release(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let pt = self.lang == Lang::PtBr;
+        ui.set_max_width((ctx.screen_rect().width() - 32.0).clamp(160.0, 360.0));
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+        ui.strong(format!("Upkeep {}", env!("CARGO_PKG_VERSION")));
+        ui.label(if pt {
+            "Verifica releases estáveis no GitHub ao abrir o Upkeep."
+        } else {
+            "Checks stable GitHub releases when Upkeep opens."
+        });
+        if self.upkeep_check_loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(if pt {
+                    "Consultando GitHub..."
+                } else {
+                    "Checking GitHub..."
+                });
+            });
+        } else if let Some(result) = &self.upkeep_release {
+            match result {
+                Ok(Some(release)) => match release.relation {
+                    std::cmp::Ordering::Greater => {
+                        ui.colored_label(
+                            theme::accent_green(),
+                            if pt {
+                                format!("Nova versão disponível: {}", release.version)
+                            } else {
+                                format!("New version available: {}", release.version)
+                            },
+                        );
+                        ui.hyperlink_to(
+                            if pt {
+                                "Ver novidades e baixar"
+                            } else {
+                                "View release and download"
+                            },
+                            &release.url,
+                        );
+                    }
+                    std::cmp::Ordering::Equal => {
+                        ui.label(if pt {
+                            "Você está na versão mais recente."
+                        } else {
+                            "You have the latest release."
+                        });
+                    }
+                    std::cmp::Ordering::Less => {
+                        ui.label(if pt {
+                            format!(
+                                "Esta instalação é mais recente que a release publicada ({}).",
+                                release.version
+                            )
+                        } else {
+                            format!(
+                                "This installation is newer than the published release ({}).",
+                                release.version
+                            )
+                        });
+                    }
+                },
+                Ok(None) => {
+                    ui.label(if pt {
+                        "Nenhuma release estável publicada."
+                    } else {
+                        "No stable release has been published."
+                    });
+                }
+                Err(error) => {
+                    ui.colored_label(
+                        theme::warn_amber(),
+                        if pt {
+                            "Não foi possível verificar. Confira a conexão e tente novamente."
+                        } else {
+                            "Could not check. Check your connection and try again."
+                        },
+                    );
+                    ui.collapsing(if pt { "Detalhes" } else { "Details" }, |ui| {
+                        ui.label(error);
+                    });
+                }
+            }
+        }
+        if ui
+            .add_enabled(
+                !self.upkeep_check_loading,
+                egui::Button::new(if pt {
+                    "Verificar versão do Upkeep"
+                } else {
+                    "Check for Upkeep updates"
+                }),
+            )
+            .clicked()
+        {
+            self.check_upkeep_release(ctx);
+        }
+        ui.hyperlink_to(
+            if pt {
+                "Todas as releases"
+            } else {
+                "All releases"
+            },
+            crate::self_update::RELEASES_URL,
+        );
+    }
+
     fn draw_top_banner(&mut self, ctx: &egui::Context) {
         let t = self.tr();
         let mut selected_lang: Option<&str> = None;
@@ -1679,6 +1814,18 @@ impl DashboardApp {
                                 });
                         });
                 });
+                ui.menu_button(
+                    if self.lang == Lang::PtBr {
+                        "Sobre"
+                    } else {
+                        "About"
+                    },
+                    |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height((ctx.screen_rect().height() - 70.0).max(80.0))
+                            .show(ui, |ui| self.draw_upkeep_release(ui, ctx));
+                    },
+                );
                 if ctx.screen_rect().width() > 1000.0 {
                     ui.label(
                         egui::RichText::new(t.tagline)
@@ -1687,6 +1834,28 @@ impl DashboardApp {
                     );
                 }
             });
+            if let Some(Ok(Some(release))) = &self.upkeep_release {
+                if release.relation == std::cmp::Ordering::Greater {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.colored_label(
+                            theme::accent_green(),
+                            if self.lang == Lang::PtBr {
+                                format!("Upkeep {} disponível", release.version)
+                            } else {
+                                format!("Upkeep {} available", release.version)
+                            },
+                        );
+                        ui.hyperlink_to(
+                            if self.lang == Lang::PtBr {
+                                "Ver release"
+                            } else {
+                                "View release"
+                            },
+                            &release.url,
+                        );
+                    });
+                }
+            }
             if let Some(err) = &self.startup_error {
                 egui::Frame::new()
                     .fill(theme::banner_warn_bg())
@@ -4908,6 +5077,62 @@ mod tests {
     }
 
     #[test]
+    fn upkeep_release_messages_cover_new_current_local_and_error_states() {
+        for lang in [Lang::En, Lang::PtBr] {
+            for (relation, expected_en, expected_pt) in [
+                (
+                    std::cmp::Ordering::Greater,
+                    "New version available",
+                    "Nova versão disponível",
+                ),
+                (
+                    std::cmp::Ordering::Equal,
+                    "latest release",
+                    "versão mais recente",
+                ),
+                (std::cmp::Ordering::Less, "newer than", "mais recente que"),
+            ] {
+                let ctx = egui::Context::default();
+                theme::apply(&ctx);
+                let mut app = DashboardApp::from_root(&ctx, None);
+                app.lang = lang;
+                app.upkeep_release = Some(Ok(Some(crate::self_update::ReleaseCheck {
+                    version: "1.10.0".into(),
+                    relation,
+                    url: "https://github.com/joaovgaraujo/Upkeep/releases/tag/v1.10.0".into(),
+                })));
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.draw_upkeep_release(ui, ctx));
+                });
+                let labels = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                assert!(
+                    labels.contains(if lang == Lang::PtBr {
+                        expected_pt
+                    } else {
+                        expected_en
+                    }),
+                    "{labels}"
+                );
+                assert!(!app.upkeep_check_loading);
+                app.upkeep_release = Some(Err("HTTP 403".into()));
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| app.draw_upkeep_release(ui, ctx));
+                });
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::epaint::Shape::Text(text) if text.galley.text().contains(if lang == Lang::PtBr { "Não foi possível" } else { "Could not check" }))));
+            }
+        }
+    }
+
+    #[test]
     fn layouts_fit_small_windows_high_zoom_and_both_languages() {
         // Render the real pages without a native window, engine or filesystem writes.
         // Width/height are usable pixels divided by display DPI and UI zoom.
@@ -4938,6 +5163,14 @@ mod tests {
                     app.tasks_fetched = true;
                     app.services_fetched = true;
                     app.autostart_fetched = true;
+                    if std::env::var_os("UPKEEP_LAYOUT_RELEASE").is_some() {
+                        app.upkeep_release = Some(Ok(Some(crate::self_update::ReleaseCheck {
+                            version: "1.10.0".into(),
+                            relation: std::cmp::Ordering::Greater,
+                            url: "https://github.com/joaovgaraujo/Upkeep/releases/tag/v1.10.0"
+                                .into(),
+                        })));
+                    }
                     if page == Page::Update && std::env::var_os("UPKEEP_LAYOUT_INITIAL").is_none() {
                         app.updates_checked = true;
                         app.update_items = vec![crate::updates::UpdateItem {
