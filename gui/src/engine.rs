@@ -110,6 +110,7 @@ pub enum EngineExit {
 }
 
 pub enum AppEvent {
+    UpkeepRelease(Result<Option<crate::self_update::ReleaseCheck>, String>),
     UpdateInventory(Result<Vec<crate::updates::UpdateItem>, String>),
     LogLine(String),
     CategoryStatus(Category, Status),
