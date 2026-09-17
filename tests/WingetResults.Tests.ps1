@@ -1,8 +1,8 @@
-﻿BeforeAll {
+BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1" $case
@@ -38,6 +38,23 @@ function winget {
     if ('SCENARIO' -eq 'inventory-error') { $global:LASTEXITCODE = 1; 'fixture source error'; return }
     if ('SCENARIO' -in @('bulk-error','current')) { return }
     if ('SCENARIO' -eq 'recovered' -and $global:scan -ge 3) { return }
+    if ('SCENARIO' -eq 'tight') {
+        # Real winget output: 'Version' and 'Unknown' are equally wide, so only one space separates the labels.
+        'Name              Id                Version Available Source'
+        '-' * 60
+        'DiskGenius V6.0.0 Eassos.DiskGenius Unknown 6.0.0     winget'
+        ''
+        return
+    }
+    if ('SCENARIO' -eq 'unknown-installed') {
+        # DisplayVersion is empty, so winget reports Unknown and offers an OLDER build than the name shows.
+        '{0,-20}{1,-35}{2,-15}{3,-15}Source' -f 'Name','Id','Version','Available'
+        '-' * 100
+        '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'DiskGenius V6.2.0','Eassos.DiskGenius','Unknown','6.0.0'
+        '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Fixture','Fixture.App','1','2'
+        ''
+        return
+    }
     if ('SCENARIO' -eq 'localized') {
         '{0,-20}{1,-35}{2,-15}{3,-15}Fonte' -f 'Nome','Id','Versao','Disponivel'
     } else { '{0,-20}{1,-35}{2,-15}{3,-15}Source' -f 'Name','Id','Version','Available' }
@@ -90,6 +107,17 @@ Describe 'Winget results with fake inventory and installers' {
         $r=Invoke-FakeWinget localized
         $r.Code | Should -Be 1
         $r.Output | Should -Match 'Fixture.App'
+    }
+    It 'parses headings winget separates with a single space' {
+        $r = Invoke-FakeWinget tight
+        $r.Output | Should -Not -Match 'Unrecognized winget inventory columns'
+        $r.Output | Should -Match 'Eassos.DiskGenius'
+    }
+    It 'does not reinstall or downgrade an Unknown-version app whose name shows a newer version' {
+        $r = Invoke-FakeWinget unknown-installed
+        $r.Output | Should -Match 'Eassos.DiskGenius : skipped'
+        $r.Calls | Should -Match '--id Fixture.App'
+        $r.Calls | Should -Not -Match '--all|--id Eassos.DiskGenius'
     }
     It 'retries the recorded app without a bulk update or unrelated installs' {
         $r=Invoke-FakeWinget retry

@@ -93,6 +93,10 @@ rem    --no-progress, which otherwise spams thousands of progress lines into
 rem    the log). This is a one-time global choco setting.
 where choco >nul 2>&1 && choco feature disable -n=showDownloadProgress >nul 2>&1
 
+rem -- wsl.exe writes UTF-16 when redirected, which lands in the UTF-8 log as
+rem    "C h e c k i n g   f o r   u p d a t e s". WSL_UTF8 makes it emit UTF-8.
+set "WSL_UTF8=1"
+
 rem -- Ensure topgrade is installed -----------------------------------------
 where topgrade >nul 2>&1
 if %errorLevel% neq 0 (

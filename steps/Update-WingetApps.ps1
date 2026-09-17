@@ -124,6 +124,11 @@ function Get-PendingUpgrades {
     if ($headerIdx -lt 0) { return $result }
     # Column positions are stable across translated header labels.
     $columns = @([regex]::Matches($lines[$headerIdx], '\S.*?(?=\s{2,}|$)'))
+    # winget pads a column with a single space when its widest value is exactly
+    # as long as the label ("Version Available Source" over "Unknown 6.0.0"),
+    # which merges labels above. The labels themselves are one word each, so
+    # fall back to plain word boundaries before giving up.
+    if ($columns.Count -lt 4) { $columns = @([regex]::Matches($lines[$headerIdx], '\S+')) }
     if ($columns.Count -lt 4) { throw 'Unrecognized winget inventory columns; refusing to report a successful inventory.' }
     $idPos = $columns[1].Index
     $verPos = $columns[2].Index
@@ -150,10 +155,41 @@ function Get-PendingUpgrades {
     # Never individually retry the installer that caused an unsolicited reboot.
     $result.Remove('ElectronicArts.EADesktop')
     foreach ($key in @($result.Keys)) {
-        if ($ignoredIds -contains $key -or ($selectionMode -and $selectedIds -notcontains $key)) { $result.Remove($key) }
+        if ($ignoredIds -contains $key -or ($selectionMode -and $selectedIds -notcontains $key)) { $result.Remove($key); continue }
+        $installed = Get-NameVersion -Name $result[$key].Name
+        $offered = ConvertTo-LooseVersion $result[$key].Available
+        if ($result[$key].Current -eq 'Unknown' -and $installed -and $offered -and $installed -ge $offered) {
+            if (-not $script:versionGuarded.ContainsKey($key)) {
+                $script:versionGuarded[$key] = "$installed"
+                if (-not $InventoryOnly) {
+                    Write-Host "[winget] $key : skipped - winget cannot read its version, but '$($result[$key].Name)' is already at or above $($result[$key].Available). Upgrading would reinstall or downgrade it."
+                }
+            }
+            $result.Remove($key)
+        }
     }
     $result
 }
+
+# First 2-4 dotted numeric parts as a [version], or $null ("156.0-1" -> 156.0).
+function ConvertTo-LooseVersion {
+    param([string]$Text)
+    $m = [regex]::Match("$Text", '\d+(\.\d+){1,3}')
+    if (-not $m.Success) { return $null }
+    try { [version]$m.Value } catch { $null }
+}
+
+# Some installers never write DisplayVersion, so winget lists the package as
+# "Unknown" and --include-unknown reinstalls whatever the manifest offers on
+# every run - even an OLDER build (DiskGenius V6.2.0 was replaced by 6.0.0).
+# Their display name often carries the real version; use it as a guard.
+function Get-NameVersion {
+    param([string]$Name)
+    $m = [regex]::Match("$Name", '(?i)(?:^|\s)v?(\d+(\.\d+){1,3})\b')
+    if (-not $m.Success) { return $null }
+    ConvertTo-LooseVersion $m.Groups[1].Value
+}
+$script:versionGuarded = @{}
 
 if ($InventoryOnly) {
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -215,7 +251,9 @@ Write-Host "[winget] $($before.Count) package(s) have upgrades available."
 
 Write-Host '[winget] Upgrading winget packages silently...'
 $upgradeExit = 0
-if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0) {
+# `--all` would still reinstall anything the inventory filtered out, so any
+# exclusion switches to per-package upgrades of exactly what is listed.
+if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0) {
     $output = @()
     foreach ($id in @($before.Keys)) {
         if ($id -eq 'ElectronicArts.EADesktop') { continue }
