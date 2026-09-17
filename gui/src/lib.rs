@@ -15,3 +15,4 @@ pub mod reboot;
 pub mod settings;
 pub mod system;
 pub mod theme;
+pub mod updates;

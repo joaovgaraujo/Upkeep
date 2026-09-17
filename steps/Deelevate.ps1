@@ -35,6 +35,25 @@ function Test-Elevated {
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Test-RequiresNormalUser {
+    param([int]$ExitCode, [string]$Output)
+    # WinGet ADMIN_CONTEXT_ACTION_PROHIBITED and INSTALLER_PROHIBITS_ELEVATION.
+    $ExitCode -in @(-1978335107, -1978335146) -or
+        $Output -match 'user scope cannot be uninstalled when running with administrator|installer cannot be run from an administrator context'
+}
+
+function Get-DeelevatedUserSid {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $session = (Get-Process -Id $PID).SessionId
+    $shells = @(Get-CimInstance Win32_Process -Filter "Name = 'explorer.exe'" -ErrorAction Stop |
+        Where-Object { $_.SessionId -eq $session })
+    foreach ($shell in $shells) {
+        $owner = Invoke-CimMethod -InputObject $shell -MethodName GetOwnerSid -ErrorAction Stop
+        if ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid) { return $sid }
+    }
+    throw 'No desktop session for this account. Open Upkeep from your usual Windows account; do not use another administrator account for user-app updates.'
+}
+
 function Invoke-Deelevated {
     <#
     .PARAMETER Command
@@ -46,8 +65,8 @@ function Invoke-Deelevated {
         an installer mid-write is worse interrupted than left alone.
 
     .OUTPUTS
-        [pscustomobject] with ExitCode and Output, or $null when the command
-        could not be run unelevated at all (caller should fall back).
+        [pscustomobject] with Status, ExitCode and Output. TimedOut means the
+        installer may still be running; never start a second attempt.
     #>
     param(
         [Parameter(Mandatory)][string]$Command,
@@ -60,9 +79,14 @@ function Invoke-Deelevated {
     $outFile = Join-Path $work 'out.txt'
     $doneFile = Join-Path $work 'done.txt'
     $taskName = "Upkeep_Deelev_$tag"
+    $started = $false
+    $completed = $false
 
     try {
+        $userSid = Get-DeelevatedUserSid
         New-Item -ItemType Directory -Path $work -Force -ErrorAction Stop | Out-Null
+        $outLiteral = $outFile.Replace("'", "''")
+        $doneLiteral = $doneFile.Replace("'", "''")
 
         # *>&1 so stderr lands in the transcript too: winget writes some of its
         # refusals there, and those are exactly the lines we need to classify.
@@ -75,17 +99,22 @@ function Invoke-Deelevated {
         $body = @"
 `$ErrorActionPreference = 'Continue'
 `$cmd = {
+`$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+`$principal = New-Object Security.Principal.WindowsPrincipal(`$identity)
+if (`$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Windows did not provide a non-admin token. Installer was not started.'
+}
 $Command
 }
 try {
-    & `$cmd *>&1 | Out-File -FilePath '$outFile' -Encoding utf8
+    & `$cmd *>&1 | Out-File -FilePath '$outLiteral' -Encoding utf8
     `$code = `$LASTEXITCODE
 } catch {
-    `$_ | Out-File -FilePath '$outFile' -Append -Encoding utf8
+    `$_ | Out-File -FilePath '$outLiteral' -Append -Encoding utf8
     `$code = 1
 }
-if (`$null -eq `$code) { `$code = 0 }
-Set-Content -Path '$doneFile' -Value `$code -Encoding ascii
+if (`$null -eq `$code) { `$code = 1 }
+Set-Content -LiteralPath '$doneLiteral' -Value `$code -Encoding ascii
 "@
         Set-Content -Path $runner -Value $body -Encoding UTF8 -ErrorAction Stop
 
@@ -94,7 +123,7 @@ Set-Content -Path '$doneFile' -Value `$code -Encoding ascii
         # UAC elevation does not change the user, only the integrity level, so
         # the same account at RunLevel Limited is the unelevated us.
         $principal = New-ScheduledTaskPrincipal `
-            -UserId "$env:USERDOMAIN\$env:USERNAME" `
+            -UserId $userSid `
             -LogonType Interactive -RunLevel Limited
         $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
             -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
@@ -102,28 +131,40 @@ Set-Content -Path '$doneFile' -Value `$code -Encoding ascii
         Register-ScheduledTask -TaskName $taskName -Action $action `
             -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
         Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        $started = $true
 
         $deadline = (Get-Date).AddSeconds($TimeoutSec)
         while ((Get-Date) -lt $deadline) {
             if (Test-Path -LiteralPath $doneFile) { break }
             Start-Sleep -Milliseconds 500
         }
-        if (-not (Test-Path -LiteralPath $doneFile)) { return $null }
+        if (-not (Test-Path -LiteralPath $doneFile)) {
+            return [pscustomobject]@{ Status = 'TimedOut'; ExitCode = 1; Output = "Normal-user installer has not finished after ${TimeoutSec}s and may still be running. No second attempt was started. Wait before retrying. Diagnostics: $work (task $taskName)." }
+        }
+        $completed = $true
 
         $code = 0
         $raw = (Get-Content -LiteralPath $doneFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-        [void][int]::TryParse(("$raw").Trim(), [ref]$code)
+        if (-not [int]::TryParse(("$raw").Trim(), [ref]$code)) { throw 'Normal-user worker returned an invalid exit code; result is unknown.' }
 
         $text = ''
         if (Test-Path -LiteralPath $outFile) {
             $text = (Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue)
         }
 
-        [pscustomobject]@{ ExitCode = $code; Output = "$text" }
+        [pscustomobject]@{ Status = 'Completed'; ExitCode = $code; Output = "$text" }
     } catch {
-        return $null
+        return [pscustomobject]@{ Status = 'Unavailable'; ExitCode = 1; Output = "Could not run as normal user: $($_.Exception.Message)" }
     } finally {
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not $started -or $completed) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+            # Only this invocation's generated directory beneath TEMP is removed.
+            $resolved = [IO.Path]::GetFullPath($work)
+            $tempRoot = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+            if ($resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -and
+                [IO.Path]::GetFileName($resolved) -eq "Upkeep_deelev_$tag") {
+                Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 }

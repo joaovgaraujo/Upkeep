@@ -153,7 +153,11 @@ pub(crate) fn kill_tree(child: &mut Child) {
     let _ = child.kill();
 }
 
-fn run_hidden(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+pub(crate) fn run_hidden(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, String> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .stdout(Stdio::piped())
