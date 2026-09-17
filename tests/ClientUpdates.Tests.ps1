@@ -18,7 +18,7 @@ BeforeAll {
 Describe 'Independent client workers (fake updaters, no installed applications touched)' {
     BeforeEach {
         $savedSkip = @{}
-        foreach ($key in @('DASHBOARD_SKIP_APPS','DASHBOARD_SKIP_STORE','DASHBOARD_SKIP_STEAM')) {
+        foreach ($key in @('DASHBOARD_SKIP_APPS','DASHBOARD_SKIP_STORE','DASHBOARD_SKIP_STEAM','DASHBOARD_SKIP_OTHER_APPS')) {
             $savedSkip[$key] = [Environment]::GetEnvironmentVariable($key)
             [Environment]::SetEnvironmentVariable($key, $null)
         }
@@ -65,6 +65,14 @@ Start-Sleep -Milliseconds 300
         $run = Invoke-FakeClients -Store 'throw "must not run"' -JD 'throw "must not run"' -Steam 'throw "must not run"'
         $run.Code | Should -Be 0
         ($run.Result -split 'skipped').Count | Should -Be 4
+    }
+    It 'keeps JDownloader out of a reviewed WinGet and Store run' {
+        $env:DASHBOARD_SKIP_OTHER_APPS = '1'
+        $run = Invoke-FakeClients -JD 'throw "unchecked provider must not run"'
+        $run.Code | Should -Be 0
+        $run.Result | Should -Match 'JD_STATUS=skipped'
+        $run.Result | Should -Match 'STORE_STATUS=ok'
+        $run.Result | Should -Match 'STEAM_STATUS=ok'
     }
     It 'bounds a hung worker and continues to the next queued client' {
         $run = Invoke-FakeClients -Parallel 1 -Timeout 2 -Store 'Start-Sleep -Seconds 60'

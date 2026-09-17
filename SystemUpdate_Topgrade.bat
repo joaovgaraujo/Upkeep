@@ -42,7 +42,7 @@ if errorlevel 1 (
 )
 
 rem Selected app runs deliberately bypass other update providers.
-if defined UPKEEP_SELECTED_IDS (
+if "%UPKEEP_SELECTED_ONLY%"=="1" (
     powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-SelectedApps.ps1"
     set "SELECTED_RC=!errorLevel!"
     powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Manage-EngineLock.ps1" -Action Release
@@ -57,6 +57,7 @@ echo.
 for /f "delims=" %%I in ('powershell -NoProfile -Command "Get-Date -Format o"') do set "RUN_START=%%I"
 
 rem -- Pre-flight: ensure winget is available -------------------------------
+if "%DASHBOARD_SKIP_APPS%"=="1" goto :after_winget_preflight
 where winget >nul 2>&1
 if %errorLevel% neq 0 (
     echo [setup] winget not found. Trying to register App Installer...
@@ -74,6 +75,9 @@ if %errorLevel% neq 0 (
 where winget >nul 2>&1 && (echo [setup] winget OK) || (echo [warn] winget still unavailable - winget steps will be skipped.)
 
 rem -- Pre-flight: ensure Chocolatey is available ---------------------------
+:after_winget_preflight
+if "%DASHBOARD_SKIP_APPS%"=="1" goto :after_other_app_preflight
+if "%DASHBOARD_SKIP_OTHER_APPS%"=="1" goto :after_other_app_preflight
 where choco >nul 2>&1
 if %errorLevel% neq 0 (
     echo [setup] Chocolatey not found, installing...
@@ -110,7 +114,8 @@ if %errorLevel% neq 0 (
 )
 
 rem -- Ensure PSWindowsUpdate is installed (topgrade uses it) ----------------
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+:after_other_app_preflight
+if not "%DASHBOARD_SKIP_WINUPDATE%"=="1" powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "if (-not (Get-Module -ListAvailable PSWindowsUpdate)) { Install-PackageProvider NuGet -Force | Out-Null; Set-PSRepository PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue; Install-Module PSWindowsUpdate -Force -Scope AllUsers }"
 
 rem -- Apply pins (idempotent, ignores already-pinned errors) ---------------
@@ -243,7 +248,7 @@ rem    patch manifests, and steps\Update-JDownloader.ps1 needs JD closed for
 rem    the bounded -update pass).
 rem    They start minimized / to tray and are pushed back down if they pop a
 rem    window anyway - see steps\Start-Launchers.ps1.
-if not "%DASHBOARD_SKIP_APPS%"=="1" (
+if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Start-Launchers.ps1" -Only Epic
 rem There is no summary row for launchers, so surface a failure as a [warn]
 rem line - the dashboard colours those amber - rather than dropping it.
@@ -272,7 +277,7 @@ if "!errorLevel!"=="2" (set "WINGET_STATUS=skipped") else if not "!errorLevel!"=
 rem -- Find packages winget lists as needing "explicit targeting" (this is
 rem    separate from pins - it's how some publishers declare their manifest).
 rem    We'll offer to update these individually at the very end of the run.
-if not "%DASHBOARD_SKIP_APPS%"=="1" (
+if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
 set "EXPLICIT_LIST=%TEMP%\sysupd_explicit_ids.txt"
 del "!EXPLICIT_LIST!" 2>nul
 powershell -NoProfile -Command ^
@@ -315,7 +320,7 @@ rem    ReadToEndAsync also removes the .raw/.err temp files entirely.
 rem    [char]34 builds the quotes around the config path without fighting
 rem    batch's own quoting, so a path with spaces still works.
 set "TOPGRADE_TIMEOUT_MIN=45"
-if not "%DASHBOARD_SKIP_APPS%"=="1" (
+if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
 powershell -NoProfile -Command ^
   "$psi = New-Object Diagnostics.ProcessStartInfo;" ^
   "$psi.FileName = 'topgrade';" ^
@@ -331,6 +336,7 @@ powershell -NoProfile -Command ^
 )
 
 if not "%DASHBOARD_SKIP_APPS%"=="1" (set "RC=!errorLevel!") else (set "RC=0")
+if "%DASHBOARD_SKIP_OTHER_APPS%"=="1" set "RC=0"
 
 rem -- Windows Update (explicit, with a watchdog timeout) -------------------
 rem    topgrade folds Windows Update into its "system" step, which it
@@ -380,7 +386,7 @@ if exist "%CLIENT_RESULTS%" for /f "usebackq tokens=1,2 delims==" %%A in ("%CLIE
 rem -- Launch Discord and Battle.net (after updates) ------------------------
 rem    Steam is deliberately absent here: the Steam step above already
 rem    relaunched it with -silent after patching its manifests.
-if not "%DASHBOARD_SKIP_APPS%"=="1" (
+if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Start-Launchers.ps1" -Only Discord,Battlenet
 if not "!errorLevel!"=="0" echo [warn] Some chat clients could not be started - see the [launch] lines above.
 )
@@ -389,7 +395,7 @@ rem -- Re-disable Discord autostart (AFTER it was launched) -----------------
 rem    Launching Discord makes it put its Run entry back, so the pass at the
 rem    top of this script is always undone by the launch above. This is the
 rem    one that sticks - do not remove it or reorder it before the launch.
-if not "%DASHBOARD_SKIP_APPS%"=="1" (
+if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
 echo [discord] Re-checking Discord run-at-startup after launch...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Disable-DiscordAutostart.ps1"
 )
@@ -401,6 +407,7 @@ if "%DASHBOARD_SKIP_APPS%"=="1" (
     rem Failures must remain visible in the category and process exit status.
     if !RC! equ 0 (set "TOPGRADE_STATUS=ok") else (set "TOPGRADE_STATUS=error - see log, exit !RC!")
 )
+if "%DASHBOARD_SKIP_OTHER_APPS%"=="1" set "TOPGRADE_STATUS=skipped"
 for /f "delims=" %%I in ('powershell -NoProfile -Command "$s=Get-Date '%RUN_START%'; ((Get-Date)-$s).ToString('hh\:mm\:ss')"') do set "RUN_DURATION=%%I"
 
 echo.

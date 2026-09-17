@@ -147,6 +147,8 @@ pub struct DashboardApp {
     updates_checked: bool,
     updates_error: Option<String>,
     selected_update_ids: Option<Vec<String>>,
+    update_plan: Option<crate::updates::UpdatePlan>,
+    run_other_apps: bool,
 
     summary: Option<SummaryData>,
     engine_exit: Option<EngineExit>,
@@ -336,6 +338,8 @@ impl DashboardApp {
             updates_checked: false,
             updates_error: None,
             selected_update_ids: None,
+            update_plan: None,
+            run_other_apps: true,
             summary: None,
             engine_exit: None,
             toast_sent: false,
@@ -519,6 +523,22 @@ impl DashboardApp {
                     self.drivers_error = None;
                 }
                 AppEvent::UpdateInventory(result) => {
+                    if let Some(plan) = self.update_plan.as_mut().filter(|p| p.loading) {
+                        plan.loading = false;
+                        match &result {
+                            Ok(items) => {
+                                plan.items = items.clone();
+                                if let Some(ids) = &plan.only_ids {
+                                    plan.items.retain(|item| ids.contains(&item.id));
+                                }
+                                for item in &mut plan.items {
+                                    item.selected = true;
+                                }
+                                plan.error = None;
+                            }
+                            Err(error) => plan.error = Some(error.clone()),
+                        }
+                    }
                     self.updates_loading = false;
                     self.updates_checked = true;
                     match result {
@@ -852,6 +872,12 @@ impl DashboardApp {
             self.last_output = Some(Instant::now());
 
             let skip = SkipFlags {
+                selected_only: self.selected_update_ids.is_some()
+                    && !self.run_other_apps
+                    && !self.cat_windows_update
+                    && !self.cat_store
+                    && !self.cat_steam,
+                skip_other_apps: !self.run_other_apps,
                 selected_ids: self.selected_update_ids.take(),
                 skip_winupdate: !self.cat_windows_update,
                 skip_store: !self.cat_store,
@@ -1529,6 +1555,7 @@ impl DashboardApp {
         });
 
         self.draw_reboot_dialog(ctx);
+        self.draw_update_confirmation(ctx);
         self.draw_nvclean_help(ctx);
     }
 }
@@ -1814,13 +1841,10 @@ impl DashboardApp {
                     let ids: Vec<_> = self.update_items.iter().filter(|i| i.selected).map(|i| i.id.clone()).collect();
                     let label = if pt { format!("Atualizar {} apps selecionados", ids.len()) } else { format!("Update {} selected apps", ids.len()) };
                     if ui.add_enabled(!ids.is_empty(), egui::Button::new(label)).clicked() {
-                        self.selected_update_ids = Some(ids);
-                        self.cat_apps = true;
-                        self.cat_windows_update = false;
-                        self.cat_store = false;
-                        self.cat_steam = false;
-                        self.start_run(ctx, false);
-                        self.updates_checked = false;
+                        self.update_plan = Some(crate::updates::UpdatePlan {
+                            items: self.update_items.iter().filter(|i| i.selected).cloned().collect(),
+                            ..Default::default()
+                        });
                     }
                 }
             }
@@ -1854,6 +1878,84 @@ impl DashboardApp {
             }
         });
         ui.separator();
+    }
+
+    fn draw_update_confirmation(&mut self, ctx: &egui::Context) {
+        let Some(plan) = self.update_plan.as_mut() else {
+            return;
+        };
+        let pt = self.lang == Lang::PtBr;
+        let mut confirm = false;
+        let mut cancel = false;
+        let mut retry = false;
+        let response = egui::Modal::new(egui::Id::new("confirm_updates")).show(ctx, |ui| {
+            ui.set_width((ctx.screen_rect().width() - 48.0).clamp(180.0, 580.0));
+            egui::ScrollArea::vertical().id_salt("confirmation_dialog")
+                .max_height((ctx.screen_rect().height() - 64.0).max(80.0)).show(ui, |ui| {
+            ui.heading(if pt { "Confirmar atualizações" } else { "Confirm updates" });
+            ui.label(if pt { "Estes apps serão atualizados. Desmarque o que não deseja atualizar." } else { "These apps will be updated. Uncheck anything you do not want to update." });
+            if plan.loading {
+                ui.spinner();
+                ui.label(if pt { "Verificando atualizações antes de confirmar..." } else { "Checking available updates before confirmation..." });
+            }
+            if let Some(error) = &plan.error {
+                ui.colored_label(theme::status_error(), error);
+                retry = ui.button(if pt { "Verificar novamente" } else { "Check again" }).clicked();
+            }
+            egui::ScrollArea::vertical().id_salt("confirmation_items")
+                .max_height((ctx.screen_rect().height() * 0.45).max(80.0)).show(ui, |ui| {
+                    ui.add_enabled_ui(!plan.loading && plan.error.is_none(), |ui| {
+                        if !plan.items.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button(if pt { "Selecionar todos" } else { "Select all" }).clicked() { for item in &mut plan.items { item.selected = true; } }
+                                if ui.button(if pt { "Limpar seleção" } else { "Clear selection" }).clicked() { for item in &mut plan.items { item.selected = false; } }
+                            });
+                            for item in &mut plan.items {
+                                ui.push_id(&item.id, |ui| {
+                                    ui.checkbox(&mut item.selected, format!("{}  {} → {}", item.name, item.current, item.available)).on_hover_text(&item.id);
+                                });
+                            }
+                        }
+                        ui.separator();
+                        ui.label(if pt { "Categorias adicionais (os itens são verificados ao executar):" } else { "Additional categories (items are checked when run):" });
+                        ui.checkbox(&mut plan.windows, "Windows Update");
+                        ui.checkbox(&mut plan.store, if pt { "Todos os updates elegíveis da Microsoft Store" } else { "All eligible Microsoft Store updates" });
+                        ui.checkbox(&mut plan.steam, if pt { "Atualizações do Steam e jogos" } else { "Steam and game updates" });
+                        ui.checkbox(&mut plan.other_apps, if pt { "Outros atualizadores de apps e ferramentas" } else { "Other app and developer-tool updaters" });
+                        if plan.other_apps {
+                            ui.label(if pt { "Chocolatey, Topgrade, JDownloader e launchers podem atualizar apps além da lista WinGet, inclusive apps desmarcados acima." } else { "Chocolatey, Topgrade, JDownloader and launchers can update apps outside the WinGet list, including apps unchecked above." });
+                        }
+                    });
+                });
+            ui.separator();
+            let count = plan.selected_ids().len();
+            ui.label(if pt { format!("{count} apps WinGet selecionados. Nada começa antes da confirmação.") } else { format!("{count} WinGet apps selected. Nothing starts until you confirm.") });
+            ui.horizontal_wrapped(|ui| {
+                cancel = ui.button(if pt { "Cancelar" } else { "Cancel" }).clicked();
+                confirm = ui.add_enabled(plan.can_confirm(), egui::Button::new(if pt { "Confirmar e atualizar" } else { "Confirm and update" })).clicked();
+            });
+            });
+        });
+        if cancel || response.should_close() {
+            self.update_plan = None;
+        } else if confirm {
+            let plan = self.update_plan.take().unwrap();
+            self.selected_update_ids = Some(plan.selected_ids());
+            self.cat_apps =
+                !self.selected_update_ids.as_ref().unwrap().is_empty() || plan.other_apps;
+            self.cat_windows_update = plan.windows;
+            self.cat_store = plan.store;
+            self.cat_steam = plan.steam;
+            self.run_other_apps = plan.other_apps;
+            self.updates_checked = false;
+            self.start_run(ctx, false);
+        } else if retry {
+            if let Some(plan) = &mut self.update_plan {
+                plan.loading = true;
+                plan.error = None;
+            }
+            self.check_updates(ctx);
+        }
     }
 
     fn open_update_review(&mut self, mode: &str) {
@@ -1914,7 +2016,17 @@ impl DashboardApp {
                     )
                     .clicked()
                 {
-                    self.open_update_review("RetryUpdates");
+                    match crate::updates::load_failed() {
+                        Ok(ids) => {
+                            self.update_plan = Some(crate::updates::UpdatePlan {
+                                only_ids: Some(ids),
+                                loading: true,
+                                ..Default::default()
+                            });
+                            self.check_updates(ctx);
+                        }
+                        Err(error) => self.updates_error = Some(error),
+                    }
                 }
             });
             self.draw_update_picker(ui, ctx);
@@ -1930,7 +2042,8 @@ impl DashboardApp {
             }
             let any_checked =
                 self.cat_windows_update || self.cat_store || self.cat_apps || self.cat_steam;
-            let run_enabled = any_checked && !self.is_running && self.root.is_some();
+            let run_enabled =
+                any_checked && !self.is_running && !self.updates_loading && self.root.is_some();
             let run_button = egui::Button::new(
                 egui::RichText::new(if self.is_running {
                     t.running_button
@@ -1948,8 +2061,16 @@ impl DashboardApp {
             })
             .min_size(egui::vec2(ui.available_width(), 48.0));
             if ui.add_enabled(run_enabled, run_button).clicked() {
-                self.selected_update_ids = None;
-                self.start_run(ctx, false);
+                self.update_plan = Some(crate::updates::UpdatePlan {
+                    windows: self.cat_windows_update,
+                    store: self.cat_store,
+                    steam: self.cat_steam,
+                    loading: self.cat_apps,
+                    ..Default::default()
+                });
+                if self.cat_apps {
+                    self.check_updates(ctx);
+                }
             }
 
             // Stop: only while a run is in flight. Once pressed the flag is
@@ -4210,30 +4331,27 @@ impl DashboardApp {
             return;
         }
         let t = self.tr();
-        let mut open = true;
         let mut proceed = false;
         let mut cancel = false;
-        egui::Window::new(t.reboot_dialog_title)
-            .collapsible(false)
-            .resizable(false)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                ui.label(t.reboot_dialog_body);
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button(t.reboot_dialog_proceed).clicked() {
-                        proceed = true;
-                    }
-                    if ui.button(t.reboot_dialog_cancel).clicked() {
-                        cancel = true;
-                    }
-                });
+        let response = egui::Modal::new(egui::Id::new("reboot_confirmation")).show(ctx, |ui| {
+            ui.heading(t.reboot_dialog_title);
+            ui.label(t.reboot_dialog_body);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(t.reboot_dialog_proceed).clicked() {
+                    proceed = true;
+                }
+                if ui.button(t.reboot_dialog_cancel).clicked() {
+                    cancel = true;
+                }
             });
+        });
         if proceed {
             self.show_reboot_confirm = false;
             self.start_run(ctx, true);
-        } else if cancel || !open {
+        } else if cancel || response.should_close() {
             self.show_reboot_confirm = false;
+            self.selected_update_ids = None;
         }
     }
 
@@ -4628,6 +4746,12 @@ mod tests {
                         }];
                     }
                     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+                    if page == Page::Update {
+                        app.update_plan = Some(crate::updates::UpdatePlan {
+                            items: app.update_items.clone(),
+                            ..Default::default()
+                        });
+                    }
                     app.bundle_apps = load_bundle(repo, None).unwrap();
                     app.presets = discover_presets(&repo.join("presets"));
                     let mut texture_updates = Vec::new();
@@ -4700,6 +4824,50 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn cancelling_update_confirmation_never_starts_a_run() {
+        let ctx = egui::Context::default();
+        let mut app = DashboardApp::from_root(&ctx, None);
+        app.lang = Lang::En;
+        app.update_plan = Some(crate::updates::UpdatePlan {
+            store: true,
+            ..Default::default()
+        });
+        let mut cancel_position = None;
+        for pass in 0..5 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 700.0),
+                )),
+                ..Default::default()
+            };
+            if pass >= 3 {
+                let pos = cancel_position.expect("Cancel must be visible");
+                input.events = vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: pass == 3,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ];
+            }
+            let output = ctx.run(input, |ctx| app.draw_update_confirmation(ctx));
+            for clipped in output.shapes {
+                if let egui::epaint::Shape::Text(text) = clipped.shape {
+                    if text.galley.text() == "Cancel" {
+                        cancel_position = Some(text.visual_bounding_rect().center());
+                    }
+                }
+            }
+            assert!(!app.is_running);
+            assert!(app.selected_update_ids.is_none());
+        }
+        assert!(app.update_plan.is_none());
     }
 
     #[test]

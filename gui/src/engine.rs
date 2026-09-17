@@ -89,6 +89,8 @@ impl SummaryData {
 #[derive(Debug, Clone, Default)]
 pub struct SkipFlags {
     pub selected_ids: Option<Vec<String>>,
+    pub selected_only: bool,
+    pub skip_other_apps: bool,
     pub skip_winupdate: bool,
     pub skip_store: bool,
     pub skip_apps: bool,
@@ -242,6 +244,8 @@ pub fn spawn_engine(
         }
 
         for (key, skip_it) in [
+            ("UPKEEP_SELECTED_ONLY", skip.selected_only),
+            ("DASHBOARD_SKIP_OTHER_APPS", skip.skip_other_apps),
             ("DASHBOARD_SKIP_WINUPDATE", skip.skip_winupdate),
             ("DASHBOARD_SKIP_STORE", skip.skip_store),
             ("DASHBOARD_SKIP_APPS", skip.skip_apps),

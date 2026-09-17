@@ -120,7 +120,7 @@ Describe 'Reviewed update boundaries' {
         $r = Invoke-FakeWinget inventory
         $r.Code | Should -Be 0
         $r.Calls | Should -Not -Match '--all|--id'
-        $items = @($r.Output | ConvertFrom-Json)
+        $items = @(($r.Output | ConvertFrom-Json))
         $items.Count | Should -Be 2
         $items[0].Current | Should -Be '1'
         $items[0].Available | Should -Be '2'

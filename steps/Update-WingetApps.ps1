@@ -74,6 +74,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+if ($env:DASHBOARD_SKIP_OTHER_APPS -eq '1') { $NoChocoFallback = $true }
 $ignorePath = Join-Path $env:LOCALAPPDATA 'Upkeep\winget-ignore.json'
 $ignoredIds = @()
 if (Test-Path -LiteralPath $ignorePath) { $ignoredIds = @((Get-Content -LiteralPath $ignorePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)) }
