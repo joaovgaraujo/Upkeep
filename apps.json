@@ -18,7 +18,7 @@
     "unigetui": {
         "content": "UniGetUI",
         "category": "Essentials",
-        "winget": "MartiCliment.UniGetUI",
+        "winget": "Devolutions.UniGetUI",
         "choco": "wingetui",
         "description": "GUI for winget/choco/scoop/pip - browse, install, and update packages.",
         "description_pt": "Interface gráfica para winget/choco/scoop/pip — navegue, instale e atualize pacotes."
@@ -42,10 +42,10 @@
     "rustdesk": {
         "content": "RustDesk",
         "category": "Remote Access",
-        "winget": "RustDesk.RustDesk",
+        "winget": "na",
         "choco": "rustdesk",
-        "description": "Open-source remote desktop (TeamViewer alternative), self-hostable.",
-        "description_pt": "Área de trabalho remota de código aberto (alternativa ao TeamViewer), com opção de servidor próprio."
+        "description": "Open-source remote desktop with optional self-hosting. Requires Chocolatey; no longer listed in WinGet.",
+        "description_pt": "Acesso remoto de código aberto, com opção de servidor próprio. Requer Chocolatey; não está mais no WinGet."
     },
     "chrome": {
         "content": "Google Chrome",
@@ -550,5 +550,213 @@
         "choco": "na",
         "description": "Write operating system images to SD cards for Raspberry Pi.",
         "description_pt": "Grave sistemas em cartões SD para Raspberry Pi."
+    },
+    "libreoffice": {
+        "content": "LibreOffice",
+        "category": "Productivity",
+        "winget": "TheDocumentFoundation.LibreOffice",
+        "choco": "libreoffice-fresh",
+        "description": "Office suite for documents, spreadsheets and presentations.",
+        "description_pt": "Documentos, planilhas e apresentações; opção de suíte de escritório."
+    },
+    "onlyoffice": {
+        "content": "ONLYOFFICE",
+        "category": "Productivity",
+        "winget": "ONLYOFFICE.DesktopEditors",
+        "choco": "onlyoffice",
+        "description": "Desktop editors for documents, spreadsheets and presentations.",
+        "description_pt": "Alternativa de suíte de escritório; oferecer como escolha junto ao LibreOffice."
+    },
+    "thunderbird": {
+        "content": "Thunderbird",
+        "category": "Communications",
+        "winget": "Mozilla.Thunderbird",
+        "choco": "thunderbird",
+        "description": "Email client for managing multiple accounts.",
+        "description_pt": "Cliente de e-mail para várias contas."
+    },
+    "sharex": {
+        "content": "ShareX",
+        "category": "Utilities",
+        "winget": "ShareX.ShareX",
+        "choco": "sharex",
+        "description": "Screen capture, recording and annotation tools.",
+        "description_pt": "Capturas de tela, gravação e anotações; alternativa ao Greenshot."
+    },
+    "pdf24-creator": {
+        "content": "PDF24 Creator",
+        "category": "Productivity",
+        "winget": "geeksoftwareGmbH.PDF24Creator",
+        "choco": "pdf24",
+        "description": "Merge, split, convert and print PDF documents.",
+        "description_pt": "Juntar, dividir, converter e imprimir PDFs."
+    },
+    "keepassxc": {
+        "content": "KeePassXC",
+        "category": "Essentials",
+        "winget": "KeePassXCTeam.KeePassXC",
+        "choco": "keepassxc",
+        "description": "Local password vault; an alternative to cloud password managers.",
+        "description_pt": "Cofre de senhas local; alternativa ao Bitwarden."
+    },
+    "localsend": {
+        "content": "LocalSend",
+        "category": "Utilities",
+        "winget": "LocalSend.LocalSend",
+        "choco": "localsend",
+        "description": "Send files between nearby computers and phones over your local network.",
+        "description_pt": "Transferir arquivos entre PC e celular na rede local."
+    },
+    "syncthing": {
+        "content": "Syncthing",
+        "category": "Utilities",
+        "winget": "Syncthing.Syncthing",
+        "choco": "syncthing",
+        "description": "Synchronize folders between devices after configuring peers and shared folders.",
+        "description_pt": "Sincronizar pastas entre dispositivos; exige configurar os pares e pastas."
+    },
+    "spotify": {
+        "content": "Spotify",
+        "category": "Media",
+        "winget": "Spotify.Spotify",
+        "choco": "spotify",
+        "description": "Music and podcasts; service account and plan may be required.",
+        "description_pt": "Música e podcasts; conta e plano conforme o serviço."
+    },
+    "zoom": {
+        "content": "Zoom",
+        "category": "Communications",
+        "winget": "Zoom.Zoom",
+        "choco": "zoom",
+        "description": "Video meetings and collaboration.",
+        "description_pt": "Reuniões por vídeo."
+    },
+    "microsoft-teams": {
+        "content": "Microsoft Teams",
+        "category": "Communications",
+        "winget": "Microsoft.Teams",
+        "choco": "microsoft-teams-new-bootstrapper",
+        "description": "Microsoft Teams meetings, chat and collaboration.",
+        "description_pt": "Reuniões e colaboração; usar Teams atual, não Teams Classic."
+    },
+    "slack": {
+        "content": "Slack",
+        "category": "Communications",
+        "winget": "SlackTechnologies.Slack",
+        "choco": "slack",
+        "description": "Team messaging and collaboration.",
+        "description_pt": "Comunicação de equipes."
+    },
+    "obsidian": {
+        "content": "Obsidian",
+        "category": "Productivity",
+        "winget": "Obsidian.Obsidian",
+        "choco": "obsidian",
+        "description": "Organize notes and knowledge in local Markdown files.",
+        "description_pt": "Notas e organização pessoal em Markdown."
+    },
+    "joplin": {
+        "content": "Joplin",
+        "category": "Productivity",
+        "winget": "Joplin.Joplin",
+        "choco": "joplin",
+        "description": "Organize notes, notebooks and to-do lists.",
+        "description_pt": "Notas e cadernos; alternativa ao Obsidian."
+    },
+    "audacity": {
+        "content": "Audacity",
+        "category": "Media",
+        "winget": "Audacity.Audacity",
+        "choco": "audacity",
+        "description": "Record and edit audio.",
+        "description_pt": "Gravação e edição de áudio."
+    },
+    "blender": {
+        "content": "Blender",
+        "category": "Media",
+        "winget": "BlenderFoundation.Blender",
+        "choco": "blender",
+        "description": "Create 3D models, animation and rendered scenes.",
+        "description_pt": "Modelagem, animação e criação 3D."
+    },
+    "krita": {
+        "content": "Krita",
+        "category": "Media",
+        "winget": "KDE.Krita",
+        "choco": "krita",
+        "description": "Digital painting and illustration.",
+        "description_pt": "Desenho e pintura digital."
+    },
+    "paint-net": {
+        "content": "Paint.NET",
+        "category": "Media",
+        "winget": "dotPDN.PaintDotNet",
+        "choco": "paint.net",
+        "description": "Image editing for everyday tasks.",
+        "description_pt": "Edição de imagens para tarefas do dia a dia."
+    },
+    "winscp": {
+        "content": "WinSCP",
+        "category": "Development",
+        "winget": "WinSCP.WinSCP",
+        "choco": "winscp",
+        "description": "Transfer files using SFTP, SCP and other protocols.",
+        "description_pt": "Transferência de arquivos por SFTP/SCP e outros protocolos."
+    },
+    "putty": {
+        "content": "PuTTY",
+        "category": "Development",
+        "winget": "PuTTY.PuTTY",
+        "choco": "putty",
+        "description": "SSH terminal and serial connection client.",
+        "description_pt": "Terminal SSH e acesso serial."
+    },
+    "wireshark": {
+        "content": "Wireshark",
+        "category": "Development",
+        "winget": "WiresharkFoundation.Wireshark",
+        "choco": "wireshark",
+        "description": "Inspect network traffic; packet capture may need additional components.",
+        "description_pt": "Análise de tráfego de rede; recursos de captura podem exigir componentes adicionais."
+    },
+    "vscodium": {
+        "content": "VSCodium",
+        "category": "Development",
+        "winget": "VSCodium.VSCodium",
+        "choco": "vscodium",
+        "description": "Editor built from the open-source VS Code codebase.",
+        "description_pt": "Editor baseado no código aberto do VS Code; alternativa, sem seleção dupla automática."
+    },
+    "heroic-games-launcher": {
+        "content": "Heroic Games Launcher",
+        "category": "Gaming",
+        "winget": "HeroicGamesLauncher.HeroicGamesLauncher",
+        "choco": "heroic-games-launcher",
+        "description": "Alternative launcher for game libraries.",
+        "description_pt": "Launcher alternativo para bibliotecas de jogos."
+    },
+    "bambu-studio": {
+        "content": "Bambu Studio",
+        "category": "Media",
+        "winget": "Bambulab.Bambustudio",
+        "choco": "bambustudio",
+        "description": "Prepare models and slice files for 3D printing.",
+        "description_pt": "Preparação de modelos para impressão 3D."
+    },
+    "freecad": {
+        "content": "FreeCAD",
+        "category": "Media",
+        "winget": "FreeCAD.FreeCAD",
+        "choco": "freecad",
+        "description": "Parametric CAD design and 3D modeling.",
+        "description_pt": "Projeto CAD paramétrico."
+    },
+    "peazip": {
+        "content": "PeaZip",
+        "category": "Utilities",
+        "winget": "Giorgiotani.Peazip",
+        "choco": "peazip",
+        "description": "Create and extract compressed archives.",
+        "description_pt": "Gerenciamento de arquivos compactados; alternativa ao 7-Zip."
     }
 }
