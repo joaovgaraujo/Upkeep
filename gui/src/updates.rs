@@ -21,6 +21,7 @@ pub struct UpdatePlan {
     pub loading: bool,
     pub error: Option<String>,
     pub only_ids: Option<Vec<String>>,
+    pub review_categories: Option<[bool; 4]>,
 }
 
 impl UpdatePlan {

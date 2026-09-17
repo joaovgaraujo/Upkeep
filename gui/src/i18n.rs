@@ -1022,6 +1022,8 @@ pub fn category_display(lang: Lang, category: &str) -> &str {
             "Essentials" => "Essenciais",
             "Gaming" => "Jogos",
             "Internet" => "Internet",
+            "Remote Access" => "Acesso remoto",
+            "Productivity" => "Produtividade",
             "Media" => "M\u{ed}dia",
             "Utilities" => "Utilit\u{e1}rios",
             other => other,

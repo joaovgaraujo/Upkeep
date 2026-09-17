@@ -41,7 +41,7 @@
     },
     "rustdesk": {
         "content": "RustDesk",
-        "category": "Utilities",
+        "category": "Remote Access",
         "winget": "RustDesk.RustDesk",
         "choco": "rustdesk",
         "description": "Open-source remote desktop (TeamViewer alternative), self-hostable.",
@@ -353,7 +353,7 @@
     },
     "parsec": {
         "content": "Parsec",
-        "category": "Gaming",
+        "category": "Remote Access",
         "winget": "Parsec.Parsec",
         "choco": "parsec",
         "description": "Low-latency remote desktop sharing for gaming and collaboration.",
@@ -454,5 +454,101 @@
         "choco": "na",
         "description": "Official WhatsApp desktop app, distributed through the Microsoft Store.",
         "description_pt": "Aplicativo oficial do WhatsApp para desktop, distribuído pela Microsoft Store."
+    },
+    "anydesk": {
+        "content": "AnyDesk",
+        "category": "Remote Access",
+        "winget": "AnyDesk.AnyDesk",
+        "choco": "na",
+        "description": "Remote desktop access and support.",
+        "description_pt": "Acesso remoto ao computador e suporte técnico."
+    },
+    "helium": {
+        "content": "Helium",
+        "category": "Internet",
+        "winget": "ImputNet.Helium",
+        "choco": "na",
+        "description": "Chromium-based browser focused on privacy.",
+        "description_pt": "Navegador baseado no Chromium com foco em privacidade."
+    },
+    "zotero": {
+        "content": "Zotero",
+        "category": "Productivity",
+        "winget": "DigitalScholar.Zotero",
+        "choco": "na",
+        "description": "Organize research papers, references and citations.",
+        "description_pt": "Organize artigos, referências e citações para pesquisas."
+    },
+    "calibre": {
+        "content": "calibre",
+        "category": "Productivity",
+        "winget": "calibre.calibre",
+        "choco": "na",
+        "description": "Organize, read and convert your ebook library.",
+        "description_pt": "Organize, leia e converta sua biblioteca de livros digitais."
+    },
+    "drawio": {
+        "content": "draw.io",
+        "category": "Productivity",
+        "winget": "JGraph.Draw",
+        "choco": "na",
+        "description": "Create flowcharts, diagrams and process maps.",
+        "description_pt": "Crie fluxogramas, diagramas e mapas de processos."
+    },
+    "gimp": {
+        "content": "GIMP",
+        "category": "Media",
+        "winget": "GIMP.GIMP.3",
+        "choco": "na",
+        "description": "Edit photos and create digital images.",
+        "description_pt": "Edite fotos e crie imagens digitais."
+    },
+    "inkscape": {
+        "content": "Inkscape",
+        "category": "Media",
+        "winget": "Inkscape.Inkscape",
+        "choco": "na",
+        "description": "Create vector illustrations, logos and SVG graphics.",
+        "description_pt": "Crie ilustrações vetoriais, logotipos e gráficos SVG."
+    },
+    "uv": {
+        "content": "uv",
+        "category": "Development",
+        "winget": "astral-sh.uv",
+        "choco": "na",
+        "description": "Manage Python packages, environments and projects.",
+        "description_pt": "Gerencie pacotes, ambientes e projetos Python."
+    },
+    "ollama": {
+        "content": "Ollama",
+        "category": "Development",
+        "winget": "Ollama.Ollama",
+        "choco": "na",
+        "description": "Run language models locally; model downloads require additional storage.",
+        "description_pt": "Execute modelos de linguagem localmente; os modelos exigem espaço adicional."
+    },
+    "pandoc": {
+        "content": "Pandoc",
+        "category": "Productivity",
+        "winget": "JohnMacFarlane.Pandoc",
+        "choco": "na",
+        "description": "Command-line converter for Markdown and document formats.",
+        "description_pt": "Converta Markdown e outros formatos de documentos pela linha de comando."
+    },
+    "subtitle-edit": {
+        "content": "Subtitle Edit",
+        "category": "Media",
+        "winget": "Nikse.SubtitleEdit",
+        "choco": "na",
+        "description": "Create, synchronize and convert video subtitles.",
+        "description_pt": "Crie, sincronize e converta legendas de vídeos."
+    },
+    "raspberry-pi-imager": {
+        "content": "Raspberry Pi Imager",
+        "category": "Utilities",
+        "winget": "RaspberryPiFoundation.RaspberryPiImager",
+        "choco": "na",
+        "description": "Write operating system images to SD cards for Raspberry Pi.",
+        "description_pt": "Grave sistemas em cartões SD para Raspberry Pi."
     }
 }
