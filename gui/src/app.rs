@@ -318,10 +318,10 @@ impl DashboardApp {
             ui_scale,
             tx,
             rx,
-            cat_windows_update: true,
-            cat_store: true,
+            cat_windows_update: false,
+            cat_store: false,
             cat_apps: true,
-            cat_steam: true,
+            cat_steam: false,
             status,
             is_running: false,
             run_start: None,
@@ -339,7 +339,7 @@ impl DashboardApp {
             updates_error: None,
             selected_update_ids: None,
             update_plan: None,
-            run_other_apps: true,
+            run_other_apps: false,
             summary: None,
             engine_exit: None,
             toast_sent: false,
@@ -1807,77 +1807,185 @@ impl DashboardApp {
     fn draw_update_picker(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let pt = self.lang == Lang::PtBr;
         if self.updates_loading {
-            ui.spinner();
-            ui.label(if pt {
-                "Verificando apps WinGet..."
-            } else {
-                "Checking WinGet apps..."
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(if pt {
+                    "Procurando novas versões dos seus apps..."
+                } else {
+                    "Looking for new versions of your apps..."
+                });
             });
+            return;
         }
         if let Some(error) = &self.updates_error {
-            ui.colored_label(theme::status_error(), error);
+            ui.colored_label(
+                theme::warn_amber(),
+                if pt {
+                    "Não foi possível verificar as atualizações. Tente novamente."
+                } else {
+                    "Could not check for updates. Please try again."
+                },
+            );
+            ui.collapsing(if pt { "Ver detalhes" } else { "Show details" }, |ui| {
+                ui.label(error);
+            });
+            return;
         }
-        ui.label(if pt { "Selecione apps WinGet abaixo. Windows, Store e outros atualizadores usam as categorias mais abaixo." } else { "Select WinGet apps below. Windows, Store and other updaters use the categories further down." });
-        let mut ignore = None;
-        let enabled = !self.is_running && !self.updates_loading;
-        ui.add_enabled_ui(enabled, |ui| {
-            if self.updates_checked && self.updates_error.is_none() {
-                if self.update_items.is_empty() { ui.label(if pt { "Nenhuma atualização WinGet elegível encontrada." } else { "No eligible WinGet updates found." }); }
-                else {
-                    ui.horizontal(|ui| {
-                        if ui.button(if pt { "Selecionar todos" } else { "Select all" }).clicked() { for item in &mut self.update_items { item.selected = true; } }
-                        if ui.button(if pt { "Limpar seleção" } else { "Clear selection" }).clicked() { for item in &mut self.update_items { item.selected = false; } }
-                    });
-                    egui::ScrollArea::vertical().id_salt("update_picker").max_height(240.0).show(ui, |ui| {
-                        for item in &mut self.update_items {
-                            ui.push_id(&item.id, |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.checkbox(&mut item.selected, format!("{}  {} → {}", item.name, item.current, item.available)).on_hover_text(&item.id);
-                                    if ui.small_button(if pt { "Ignorar" } else { "Ignore" }).clicked() { ignore = Some(item.id.clone()); }
-                                });
-                            });
-                        }
-                    });
-                    let ids: Vec<_> = self.update_items.iter().filter(|i| i.selected).map(|i| i.id.clone()).collect();
-                    let label = if pt { format!("Atualizar {} apps selecionados", ids.len()) } else { format!("Update {} selected apps", ids.len()) };
-                    if ui.add_enabled(!ids.is_empty(), egui::Button::new(label)).clicked() {
-                        self.update_plan = Some(crate::updates::UpdatePlan {
-                            items: self.update_items.iter().filter(|i| i.selected).cloned().collect(),
-                            ..Default::default()
-                        });
-                    }
+        if !self.updates_checked {
+            return;
+        }
+        if self.update_items.is_empty() {
+            ui.label(
+                egui::RichText::new(if pt {
+                    "Nenhuma atualização de app encontrada."
+                } else {
+                    "No app updates found."
+                })
+                .strong(),
+            );
+            ui.label(if pt {
+                "Apps ignorados não aparecem aqui. Windows e Store ficam em Outras atualizações."
+            } else {
+                "Ignored apps are not listed. Windows and Store are under Other updates."
+            });
+            return;
+        }
+        ui.label(
+            egui::RichText::new(if pt {
+                format!("Apps disponíveis: {}", self.update_items.len())
+            } else {
+                format!("Choose apps · {} available", self.update_items.len())
+            })
+            .size(20.0)
+            .strong(),
+        );
+        ui.label(if pt {
+            "Marque os apps que deseja atualizar. Você revisará a lista antes de começar."
+        } else {
+            "Check the apps you want to update. You will review the list before anything starts."
+        });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .small_button(if pt { "Selecionar todos" } else { "Select all" })
+                .clicked()
+            {
+                for item in &mut self.update_items {
+                    item.selected = true;
                 }
             }
-            match crate::updates::load_ignored() {
-                Ok(mut ignored) => {
-                    if let Some(id) = ignore.take() {
-                        if !ignored.contains(&id) { ignored.push(id.clone()); }
-                        match crate::updates::save_ignored(&ignored) {
-                            Ok(()) => self.update_items.retain(|i| i.id != id),
-                            Err(e) => self.updates_error = Some(e),
-                        }
-                    }
-                    if !ignored.is_empty() {
-                        ui.collapsing(if pt { "Apps WinGet ignorados" } else { "Ignored WinGet apps" }, |ui| {
-                            ui.label(if pt { "Ignorados nas atualizações WinGet do Upkeep, até você removê-los desta lista." } else { "Skipped by Upkeep's WinGet updates until removed from this list." });
-                            let mut remove = None;
-                            for id in &ignored {
-                                ui.horizontal(|ui| { ui.label(id); if ui.small_button(if pt { "Restaurar" } else { "Restore" }).clicked() { remove = Some(id.clone()); } });
-                            }
-                            if let Some(id) = remove {
-                                ignored.retain(|i| i != &id);
-                                match crate::updates::save_ignored(&ignored) {
-                                    Ok(()) => self.check_updates(ctx),
-                                    Err(e) => self.updates_error = Some(e),
-                                }
-                            }
-                        });
-                    }
+            if ui
+                .small_button(if pt {
+                    "Limpar seleção"
+                } else {
+                    "Clear selection"
+                })
+                .clicked()
+            {
+                for item in &mut self.update_items {
+                    item.selected = false;
                 }
-                Err(e) => { ui.colored_label(theme::status_error(), format!("Ignore list: {e}")); }
             }
         });
-        ui.separator();
+        let mut ignore = None;
+        egui::ScrollArea::vertical()
+            .id_salt("update_picker")
+            .max_height(320.0)
+            .show(ui, |ui| {
+                for item in &mut self.update_items {
+                    ui.push_id(&item.id, |ui| {
+                        ui.separator();
+                        ui.checkbox(&mut item.selected, egui::RichText::new(&item.name).strong())
+                            .on_hover_text(&item.id);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new(if pt {
+                                    format!(
+                                        "Instalada: {}   Nova: {}",
+                                        item.current, item.available
+                                    )
+                                } else {
+                                    format!("Installed: {}   New: {}", item.current, item.available)
+                                })
+                                .small()
+                                .color(theme::subtle_text()),
+                            );
+                            ui.menu_button(if pt { "Opções" } else { "Options" }, |ui| {
+                                if ui
+                                    .button(if pt {
+                                        "Ignorar este app"
+                                    } else {
+                                        "Ignore this app"
+                                    })
+                                    .clicked()
+                                {
+                                    ignore = Some(item.id.clone());
+                                    ui.close();
+                                }
+                            });
+                        });
+                    });
+                }
+            });
+        if let Some(id) = ignore {
+            match crate::updates::load_ignored().and_then(|mut ignored| {
+                if !ignored.contains(&id) {
+                    ignored.push(id.clone());
+                }
+                crate::updates::save_ignored(&ignored)
+            }) {
+                Ok(()) => self.update_items.retain(|item| item.id != id),
+                Err(error) => self.updates_error = Some(error),
+            }
+        }
+        let _ = ctx;
+    }
+
+    fn draw_ignored_updates(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let pt = self.lang == Lang::PtBr;
+        match crate::updates::load_ignored() {
+            Ok(mut ignored) => {
+                if ignored.is_empty() {
+                    ui.label(if pt {
+                        "Nenhum app ignorado."
+                    } else {
+                        "No ignored apps."
+                    });
+                } else {
+                    ui.label(if pt {
+                        "Estes apps não entram na lista de atualizações do Upkeep."
+                    } else {
+                        "These apps are excluded from Upkeep's app update list."
+                    });
+                    let mut restore = None;
+                    for id in &ignored {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(id);
+                            if ui
+                                .small_button(if pt {
+                                    "Voltar a verificar"
+                                } else {
+                                    "Check again"
+                                })
+                                .clicked()
+                            {
+                                restore = Some(id.clone());
+                            }
+                        });
+                    }
+                    if let Some(id) = restore {
+                        ignored.retain(|item| item != &id);
+                        match crate::updates::save_ignored(&ignored) {
+                            Ok(()) => self.check_updates(ctx),
+                            Err(error) => self.updates_error = Some(error),
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                ui.label(error);
+            }
+        }
     }
 
     fn draw_update_confirmation(&mut self, ctx: &egui::Context) {
@@ -1888,6 +1996,12 @@ impl DashboardApp {
         let mut confirm = false;
         let mut cancel = false;
         let mut retry = false;
+        let offered = *plan.review_categories.get_or_insert([
+            plan.windows,
+            plan.store,
+            plan.steam,
+            plan.other_apps,
+        ]);
         let response = egui::Modal::new(egui::Id::new("confirm_updates")).show(ctx, |ui| {
             ui.set_width((ctx.screen_rect().width() - 48.0).clamp(180.0, 580.0));
             egui::ScrollArea::vertical().id_salt("confirmation_dialog")
@@ -1906,22 +2020,22 @@ impl DashboardApp {
                 .max_height((ctx.screen_rect().height() * 0.45).max(80.0)).show(ui, |ui| {
                     ui.add_enabled_ui(!plan.loading && plan.error.is_none(), |ui| {
                         if !plan.items.is_empty() {
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button(if pt { "Selecionar todos" } else { "Select all" }).clicked() { for item in &mut plan.items { item.selected = true; } }
-                                if ui.button(if pt { "Limpar seleção" } else { "Clear selection" }).clicked() { for item in &mut plan.items { item.selected = false; } }
-                            });
                             for item in &mut plan.items {
                                 ui.push_id(&item.id, |ui| {
-                                    ui.checkbox(&mut item.selected, format!("{}  {} → {}", item.name, item.current, item.available)).on_hover_text(&item.id);
+                                    ui.checkbox(&mut item.selected, egui::RichText::new(&item.name).strong()).on_hover_text(&item.id);
+                                    ui.label(egui::RichText::new(if pt { format!("Instalada: {}   Nova: {}", item.current, item.available) } else { format!("Installed: {}   New: {}", item.current, item.available) }).small().color(theme::subtle_text()));
+                                    ui.add_space(6.0);
                                 });
                             }
                         }
-                        ui.separator();
-                        ui.label(if pt { "Categorias adicionais (os itens são verificados ao executar):" } else { "Additional categories (items are checked when run):" });
-                        ui.checkbox(&mut plan.windows, "Windows Update");
-                        ui.checkbox(&mut plan.store, if pt { "Todos os updates elegíveis da Microsoft Store" } else { "All eligible Microsoft Store updates" });
-                        ui.checkbox(&mut plan.steam, if pt { "Atualizações do Steam e jogos" } else { "Steam and game updates" });
-                        ui.checkbox(&mut plan.other_apps, if pt { "Outros atualizadores de apps e ferramentas" } else { "Other app and developer-tool updaters" });
+                        if offered.iter().any(|value| *value) {
+                            ui.separator();
+                            ui.label(if pt { "Outras atualizações escolhidas (verificadas ao executar):" } else { "Other selected updates (checked when run):" });
+                        }
+                        if offered[0] { ui.checkbox(&mut plan.windows, "Windows Update"); }
+                        if offered[1] { ui.checkbox(&mut plan.store, "Microsoft Store"); }
+                        if offered[2] { ui.checkbox(&mut plan.steam, if pt { "Steam e jogos" } else { "Steam and games" }); }
+                        if offered[3] { ui.checkbox(&mut plan.other_apps, if pt { "Outros atualizadores de apps e ferramentas" } else { "Other app and developer-tool updaters" }); }
                         if plan.other_apps {
                             ui.label(if pt { "Chocolatey, Topgrade, JDownloader e launchers podem atualizar apps além da lista WinGet, inclusive apps desmarcados acima." } else { "Chocolatey, Topgrade, JDownloader and launchers can update apps outside the WinGet list, including apps unchecked above." });
                         }
@@ -1929,10 +2043,10 @@ impl DashboardApp {
                 });
             ui.separator();
             let count = plan.selected_ids().len();
-            ui.label(if pt { format!("{count} apps WinGet selecionados. Nada começa antes da confirmação.") } else { format!("{count} WinGet apps selected. Nothing starts until you confirm.") });
+            ui.label(if pt { format!("{count} apps selecionados. Nada começa antes da confirmação.") } else { format!("{count} apps selected. Nothing starts until you confirm.") });
             ui.horizontal_wrapped(|ui| {
                 cancel = ui.button(if pt { "Cancelar" } else { "Cancel" }).clicked();
-                confirm = ui.add_enabled(plan.can_confirm(), egui::Button::new(if pt { "Confirmar e atualizar" } else { "Confirm and update" })).clicked();
+                confirm = ui.add_enabled(plan.can_confirm(), egui::Button::new(egui::RichText::new(if pt { "Confirmar e atualizar" } else { "Confirm and update" }).color(theme::on_accent())).fill(theme::accent_green())).clicked();
             });
             });
         });
@@ -1986,91 +2100,235 @@ impl DashboardApp {
     fn draw_update_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let t = self.tr();
         centered_column(ui, 720.0, |ui| {
-            ui.add_space(14.0);
-            ui.label(egui::RichText::new(t.update_title).size(26.0).strong());
-            ui.label(egui::RichText::new(t.update_subtitle).color(theme::subtle_text()));
-            ui.add_space(10.0);
-
+            let compact = ctx.screen_rect().height() < 450.0;
+            ui.add_space(if compact { 2.0 } else { 14.0 });
+            let pt = self.lang == Lang::PtBr;
+            ui.label(
+                egui::RichText::new(if pt { "Atualizações" } else { "Updates" })
+                    .size(28.0)
+                    .strong(),
+            );
+            if !compact {
+                ui.label(
+                    egui::RichText::new(if pt {
+                        "Confira o que está disponível e escolha o que atualizar."
+                    } else {
+                        "See what's available and choose what to update."
+                    })
+                    .color(theme::subtle_text()),
+                );
+            }
+            ui.add_space(if compact { 2.0 } else { 10.0 });
             ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        !self.is_running,
-                        egui::Button::new(if self.lang == Lang::PtBr {
-                            "Verificar atualizações"
-                        } else {
-                            "Check for updates"
-                        }),
-                    )
-                    .clicked()
-                {
-                    self.check_updates(ctx);
+                for (index, label) in if pt {
+                    ["1  Verificar", "2  Escolher apps", "3  Confirmar"]
+                } else {
+                    ["1  Check", "2  Choose apps", "3  Confirm"]
                 }
-                if ui
-                    .add_enabled(
-                        !self.is_running,
-                        egui::Button::new(if self.lang == Lang::PtBr {
-                            "Repetir apps com falha"
-                        } else {
-                            "Retry failed app updates"
-                        }),
-                    )
-                    .clicked()
+                .into_iter()
+                .enumerate()
                 {
-                    match crate::updates::load_failed() {
-                        Ok(ids) => {
-                            self.update_plan = Some(crate::updates::UpdatePlan {
-                                only_ids: Some(ids),
-                                loading: true,
-                                ..Default::default()
-                            });
-                            self.check_updates(ctx);
-                        }
-                        Err(error) => self.updates_error = Some(error),
+                    let active = index == usize::from(self.updates_checked);
+                    ui.label(egui::RichText::new(label).small().color(if active {
+                        theme::accent_green()
+                    } else {
+                        theme::subtle_text()
+                    }));
+                    if index < 2 {
+                        ui.label(egui::RichText::new("/").weak());
                     }
                 }
             });
-            self.draw_update_picker(ui, ctx);
-            if ui
-                .button(if self.lang == Lang::PtBr {
-                    "Gerenciar continuação após reiniciar"
-                } else {
-                    "Manage restart continuation"
-                })
-                .clicked()
-            {
-                self.open_update_review("ManageResume");
-            }
-            let any_checked =
-                self.cat_windows_update || self.cat_store || self.cat_apps || self.cat_steam;
-            let run_enabled =
-                any_checked && !self.is_running && !self.updates_loading && self.root.is_some();
-            let run_button = egui::Button::new(
-                egui::RichText::new(if self.is_running {
-                    t.running_button
-                } else {
-                    t.run_cta
-                })
-                .strong()
-                .size(18.0)
-                .color(theme::on_accent()),
-            )
-            .fill(if run_enabled {
-                theme::accent_green()
-            } else {
-                theme::accent_green_dim()
-            })
-            .min_size(egui::vec2(ui.available_width(), 48.0));
-            if ui.add_enabled(run_enabled, run_button).clicked() {
-                self.update_plan = Some(crate::updates::UpdatePlan {
-                    windows: self.cat_windows_update,
-                    store: self.cat_store,
-                    steam: self.cat_steam,
-                    loading: self.cat_apps,
-                    ..Default::default()
+            ui.add_space(if compact { 4.0 } else { 12.0 });
+            if !self.is_running {
+                theme::card().show(ui, |ui| {
+                    if !self.updates_checked
+                        && !self.updates_loading
+                        && self.updates_error.is_none()
+                    {
+                        ui.strong(if pt {
+                            "Comece verificando seus apps"
+                        } else {
+                            "Start by checking your apps"
+                        });
+                        ui.label(if pt {
+                            "A verificação encontra novas versões. Nada será instalado agora."
+                        } else {
+                            "The check finds new versions. Nothing will be installed yet."
+                        });
+                        ui.add_space(10.0);
+                    }
+                    if !self.updates_checked {
+                        let label = if self.updates_loading {
+                            if pt {
+                                "Verificando..."
+                            } else {
+                                "Checking..."
+                            }
+                        } else if pt {
+                            "Verificar atualizações"
+                        } else {
+                            "Check for updates"
+                        };
+                        if ui
+                            .add_enabled(
+                                !self.updates_loading && self.root.is_some(),
+                                egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .strong()
+                                        .color(theme::on_accent()),
+                                )
+                                .fill(theme::accent_green())
+                                .min_size(egui::vec2(ui.available_width(), 42.0)),
+                            )
+                            .clicked()
+                        {
+                            self.check_updates(ctx);
+                        }
+                    } else if ui
+                        .small_button(if pt {
+                            "Verificar novamente"
+                        } else {
+                            "Check again"
+                        })
+                        .clicked()
+                    {
+                        self.check_updates(ctx);
+                    }
+                    ui.add_space(8.0);
+                    ui.add_enabled_ui(!self.updates_loading, |ui| self.draw_update_picker(ui, ctx));
                 });
-                if self.cat_apps {
-                    self.check_updates(ctx);
+                ui.add_space(8.0);
+                ui.collapsing(if pt { "Outras atualizações" } else { "Other updates" }, |ui| {
+                    ui.label(if pt { "Opcional. Estes serviços verificam seus próprios itens ao executar." } else { "Optional. These services check their own items when run." });
+                    let wu = self.status(Category::WindowsUpdate);
+                    let store = self.status(Category::Store);
+                    let steam = self.status(Category::Steam);
+                    category_row(ui, t, &mut self.cat_windows_update, wu, "Windows Update", t.cat_windows_update_desc, true);
+                    category_row(ui, t, &mut self.cat_store, store, "Microsoft Store", t.cat_store_desc, true);
+                    category_row(ui, t, &mut self.cat_steam, steam, if pt { "Steam e jogos" } else { "Steam and games" }, t.cat_steam_desc, true);
+                    ui.add_space(6.0);
+                    ui.checkbox(&mut self.run_other_apps, if pt { "Ferramentas de desenvolvimento e outros atualizadores" } else { "Developer tools and other updaters" });
+                    if self.run_other_apps {
+                        ui.colored_label(theme::warn_amber(), if pt { "Esta opção usa Chocolatey, Topgrade e launchers. Eles podem atualizar apps desmarcados na lista acima." } else { "This uses Chocolatey, Topgrade and launchers. They may update apps unchecked in the list above." });
+                    }
+                });
+                let selected = if self.updates_checked
+                    && !self.updates_loading
+                    && self.updates_error.is_none()
+                {
+                    self.update_items
+                        .iter()
+                        .filter(|item| item.selected)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let categories = usize::from(self.cat_windows_update)
+                    + usize::from(self.cat_store)
+                    + usize::from(self.cat_steam)
+                    + usize::from(self.run_other_apps);
+                if self.updates_checked || categories > 0 {
+                    ui.add_space(10.0);
+                    ui.label(if pt {
+                        format!(
+                            "Selecionados: {} apps e {} categorias adicionais",
+                            selected.len(),
+                            categories
+                        )
+                    } else {
+                        format!(
+                            "Selected: {} apps and {} additional categories",
+                            selected.len(),
+                            categories
+                        )
+                    });
+                    let enabled = !self.updates_loading
+                        && (!selected.is_empty() || categories > 0)
+                        && self.root.is_some();
+                    if ui
+                        .add_enabled(
+                            enabled,
+                            egui::Button::new(
+                                egui::RichText::new(if pt {
+                                    "Revisar seleção"
+                                } else {
+                                    "Review selection"
+                                })
+                                .strong()
+                                .color(theme::on_accent()),
+                            )
+                            .fill(if enabled {
+                                theme::accent_green()
+                            } else {
+                                theme::accent_green_dim()
+                            })
+                            .min_size(egui::vec2(ui.available_width(), 44.0)),
+                        )
+                        .clicked()
+                    {
+                        self.update_plan = Some(crate::updates::UpdatePlan {
+                            items: selected,
+                            windows: self.cat_windows_update,
+                            store: self.cat_store,
+                            steam: self.cat_steam,
+                            other_apps: self.run_other_apps,
+                            ..Default::default()
+                        });
+                    }
                 }
+                ui.add_space(12.0);
+                ui.collapsing(if pt { "Mais opções" } else { "More options" }, |ui| {
+                    ui.collapsing(if pt { "Apps ignorados" } else { "Ignored apps" }, |ui| {
+                        self.draw_ignored_updates(ui, ctx)
+                    });
+                    if ui
+                        .button(if pt {
+                            "Revisar apps com falha na última execução"
+                        } else {
+                            "Review apps that failed last time"
+                        })
+                        .clicked()
+                    {
+                        match crate::updates::load_failed() {
+                            Ok(ids) => {
+                                self.update_plan = Some(crate::updates::UpdatePlan {
+                                    only_ids: Some(ids),
+                                    loading: true,
+                                    ..Default::default()
+                                });
+                                self.check_updates(ctx);
+                            }
+                            Err(error) => self.updates_error = Some(error),
+                        }
+                    }
+                    if ui
+                        .button(if pt {
+                            "Gerenciar continuação após reiniciar"
+                        } else {
+                            "Manage restart continuation"
+                        })
+                        .clicked()
+                    {
+                        self.open_update_review("ManageResume");
+                    }
+                    if ui.button(t.drivers_update_btn).clicked() {
+                        self.launch_sdio();
+                    }
+                    ui.label(egui::RichText::new(t.drivers_update_hint).weak().small());
+                });
+            } else {
+                ui.heading(if pt {
+                    "Atualizando sua seleção"
+                } else {
+                    "Updating your selection"
+                });
+                ui.label(if pt {
+                    "Você pode continuar usando o PC. O resultado aparecerá aqui."
+                } else {
+                    "You can keep using your PC. The result will appear here."
+                });
             }
 
             // Stop: only while a run is in flight. Once pressed the flag is
@@ -2099,61 +2357,6 @@ impl DashboardApp {
                     self.push_log("[run] Stop requested - ending the run...".to_string());
                 }
             }
-
-            ui.add_space(10.0);
-
-            let wu_status = self.status(Category::WindowsUpdate);
-            let store_status = self.status(Category::Store);
-            let apps_status = self.status(Category::Apps);
-            let steam_status = self.status(Category::Steam);
-
-            category_row(
-                ui,
-                t,
-                &mut self.cat_windows_update,
-                wu_status,
-                t.cat_windows_update,
-                t.cat_windows_update_desc,
-                true,
-            );
-            category_row(
-                ui,
-                t,
-                &mut self.cat_store,
-                store_status,
-                t.cat_store,
-                t.cat_store_desc,
-                true,
-            );
-            category_row(
-                ui,
-                t,
-                &mut self.cat_apps,
-                apps_status,
-                t.cat_apps,
-                t.cat_apps_desc,
-                true,
-            );
-            category_row(
-                ui,
-                t,
-                &mut self.cat_steam,
-                steam_status,
-                t.cat_steam,
-                t.cat_steam_desc,
-                true,
-            );
-
-            ui.add_space(10.0);
-            // Drivers aren't part of the batch run above (SDIO opens its own
-            // GUI so you can review what it proposes before anything
-            // installs -- it can't run silently as one more checkbox), so
-            // it's a separate button rather than a fifth category card. Same
-            // action as the Tools and Driver Store pages.
-            if ui.button(t.drivers_update_btn).clicked() {
-                self.launch_sdio();
-            }
-            ui.label(egui::RichText::new(t.drivers_update_hint).weak().small());
 
             ui.add_space(10.0);
 
@@ -4735,7 +4938,7 @@ mod tests {
                     app.tasks_fetched = true;
                     app.services_fetched = true;
                     app.autostart_fetched = true;
-                    if page == Page::Update {
+                    if page == Page::Update && std::env::var_os("UPKEEP_LAYOUT_INITIAL").is_none() {
                         app.updates_checked = true;
                         app.update_items = vec![crate::updates::UpdateItem {
                             id: "Microsoft.VisualStudioCode".into(),
@@ -4746,7 +4949,8 @@ mod tests {
                         }];
                     }
                     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-                    if page == Page::Update {
+                    if page == Page::Update && std::env::var_os("UPKEEP_LAYOUT_PAGE_ONLY").is_none()
+                    {
                         app.update_plan = Some(crate::updates::UpdatePlan {
                             items: app.update_items.clone(),
                             ..Default::default()
@@ -4757,16 +4961,15 @@ mod tests {
                     let mut texture_updates = Vec::new();
                     let snapshot_dir = std::env::var_os("UPKEEP_LAYOUT_SNAPSHOTS");
                     let snapshot = snapshot_dir.is_some()
-                        && lang == Lang::PtBr
                         && (width == 820.0 || width == 1920.0)
                         && matches!(page, Page::Update | Page::Install | Page::Optimize);
-                    for pass in 0..6 {
+                    for pass in 0..36 {
                         let input = egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
                                 egui::vec2(width / scale, height / scale),
                             )),
-                            events: if pass >= 3 {
+                            events: if pass >= 33 {
                                 vec![
                                     egui::Event::PointerMoved(egui::pos2(
                                         100.0,
@@ -4790,7 +4993,7 @@ mod tests {
                                 texture_updates.push(serde_json::json!({"pos": delta.pos, "size": image.size,
                                     "pixels": image.pixels.iter().map(|c| c.to_array()).collect::<Vec<_>>() }));
                             }
-                            if pass == 2 {
+                            if pass == 32 {
                                 let meshes: Vec<_> = ctx.tessellate(output.shapes.clone(), output.pixels_per_point)
                                     .into_iter().filter_map(|p| match p.primitive {
                                         egui::epaint::Primitive::Mesh(m) => Some(serde_json::json!({
@@ -4801,7 +5004,7 @@ mod tests {
                                     }).collect();
                                 let dir = PathBuf::from(snapshot_dir.as_ref().unwrap());
                                 std::fs::create_dir_all(&dir).unwrap();
-                                std::fs::write(dir.join(format!("{page:?}-{width}.json")), serde_json::to_vec(&serde_json::json!({
+                                std::fs::write(dir.join(format!("{lang:?}-{page:?}-{width}.json")), serde_json::to_vec(&serde_json::json!({
                                     "width": width, "height": height, "scale": scale, "textures": texture_updates, "meshes": meshes
                                 })).unwrap()).unwrap();
                             }

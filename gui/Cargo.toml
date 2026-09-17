@@ -9,7 +9,7 @@
 # via the [[bin]] section and always carries the requireAdministrator
 # manifest from build.rs, so it is unaffected either way.
 name = "dashboard_core"
-version = "1.5.6"
+version = "1.5.7"
 edition = "2021"
 description = "Upkeep - update everything, set up anything. GUI wrapper for SystemUpdate_Topgrade.bat"
 build = "build.rs"
