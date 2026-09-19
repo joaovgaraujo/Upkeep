@@ -34,6 +34,15 @@ vale entender:
 
 ## Padrões que você pode querer mudar
 
+- **Atualização completa por padrão (1.7.0).** Windows Update, Microsoft Store,
+  Steam, ferramentas de desenvolvimento e outros atualizadores compatíveis já
+  começam selecionados junto dos apps WinGet. Verifique os apps e use
+  **Revisar e atualizar**. Os serviços detectam seus itens durante a execução;
+  a prévia lista os pacotes WinGet. É possível desmarcar categorias. Pins, apps
+  ignorados no WinGet e a proteção do EA continuam valendo. Outros gerenciadores
+  podem atualizar apps desmarcados no WinGet. A confirmação tem uma única lista
+  rolável e botões sempre visíveis.
+
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro
   pacotes já vêm fixados, por dois motivos diferentes:
