@@ -30,6 +30,14 @@ needs it. That has consequences worth understanding:
 
 ## Defaults you may want to change
 
+- **Full updates are the default (1.7.0).** Windows Update, Microsoft Store,
+  Steam, developer tools and other supported updaters start selected alongside
+  WinGet apps. Check available apps, then **Review and update**. Services detect
+  their own pending items during execution; the preview lists WinGet packages.
+  You can deselect categories. Existing pins, ignored WinGet apps and EA guards
+  still apply. Other package managers may update an app unchecked in WinGet.
+  The confirmation has one scrollable list and always-visible actions.
+
 - **Interface defaults follow Windows.** A new settings file uses the Windows
   display language (English or Portuguese, with English fallback) and the
   Windows accessibility text size. Use **Appearance & language** to change
