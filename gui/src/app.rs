@@ -2045,15 +2045,18 @@ impl DashboardApp {
         egui::ScrollArea::vertical()
             .id_salt("update_picker")
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-            .max_height(320.0)
-            .min_scrolled_height(240.0)
+            .max_height(440.0)
+            .min_scrolled_height(300.0)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for item in &mut self.update_items {
                     ui.push_id(&item.id, |ui| {
                         ui.separator();
-                        ui.checkbox(&mut item.selected, egui::RichText::new(&item.name).strong())
-                            .on_hover_text(&item.id);
+                        ui.checkbox(
+                            &mut item.selected,
+                            egui::RichText::new(&item.name).size(17.0).strong(),
+                        )
+                        .on_hover_text(&item.id);
                         ui.horizontal_wrapped(|ui| {
                             ui.label(
                                 egui::RichText::new(if pt {
@@ -2064,8 +2067,7 @@ impl DashboardApp {
                                 } else {
                                     format!("Installed: {}   New: {}", item.current, item.available)
                                 })
-                                .small()
-                                .color(theme::subtle_text()),
+                                .size(15.0),
                             );
                             ui.menu_button(if pt { "Opções" } else { "Options" }, |ui| {
                                 if ui
@@ -2211,8 +2213,8 @@ impl DashboardApp {
                         for item in &mut plan.items {
                             ui.push_id(&item.id, |ui| {
                                 ui.separator();
-                                ui.checkbox(&mut item.selected, egui::RichText::new(&item.name).strong());
-                                ui.label(egui::RichText::new(&item.id).small().color(theme::subtle_text()));
+                                ui.checkbox(&mut item.selected, egui::RichText::new(&item.name).size(17.0).strong())
+                                    .on_hover_text(&item.id);
                                 ui.horizontal_wrapped(|ui| {
                                     ui.label(if pt { format!("Instalada: {}", item.current) } else { format!("Installed: {}", item.current) });
                                     ui.label(egui::RichText::new(if pt { format!("Nova: {}", item.available) } else { format!("New: {}", item.available) }).color(theme::accent_green()));
@@ -2311,9 +2313,9 @@ impl DashboardApp {
             ui.add_space(if compact { 2.0 } else { 10.0 });
             ui.horizontal_wrapped(|ui| {
                 for (index, label) in if pt {
-                    ["1  Verificar", "2  Escolher apps", "3  Confirmar"]
+                    ["1  Atualizar tudo", "2  Revisar", "3  Confirmar"]
                 } else {
-                    ["1  Check", "2  Choose apps", "3  Confirm"]
+                    ["1  Update everything", "2  Review", "3  Confirm"]
                 }
                 .into_iter()
                 .enumerate()
@@ -2423,9 +2425,9 @@ impl DashboardApp {
                                 "Checking..."
                             }
                         } else if pt {
-                            "Verificar atualizações"
+                            "Atualizar tudo"
                         } else {
-                            "Check for updates"
+                            "Update everything"
                         };
                         if ui
                             .add_enabled(
@@ -2440,6 +2442,14 @@ impl DashboardApp {
                             )
                             .clicked()
                         {
+                            self.update_plan = Some(crate::updates::UpdatePlan {
+                                windows: self.cat_windows_update,
+                                store: self.cat_store,
+                                steam: self.cat_steam,
+                                other_apps: self.run_other_apps,
+                                loading: true,
+                                ..Default::default()
+                            });
                             self.check_updates(ctx);
                         }
                     } else if ui

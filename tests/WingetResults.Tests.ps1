@@ -127,6 +127,35 @@ Describe 'Winget results with fake inventory and installers' {
     }
 }
 
+Describe 'Etcher per-user installer' {
+    BeforeAll {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile("$repoRoot/steps/Update-WingetApps.ps1", [ref]$null, [ref]$null)
+        $fn = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-WingetUpgrade' }, $true)
+        . ([scriptblock]::Create($fn.Extent.Text))
+        function Test-Elevated { $true }
+        function Get-InstallScope { param($Id) 'user' }
+        function Invoke-Deelevated { param($Command) }
+    }
+    BeforeEach {
+        $script:etcherWorkerAttempt = $null
+        $NoDeelevatedRetry = $false
+    }
+    It 'runs the per-user installer once even if its worker times out' {
+        Mock Invoke-Deelevated { [pscustomobject]@{ ExitCode = 1; Status = 'TimedOut'; Output = 'Installer may still be running' } }
+        $first = Invoke-WingetUpgrade -Id 'Balena.Etcher'
+        $second = Invoke-WingetUpgrade -Id 'Balena.Etcher'
+        $first.ExitCode | Should -Be 1
+        $second.Output | Should -Match 'still be running'
+        Should -Invoke Invoke-Deelevated -Times 1 -Exactly -ParameterFilter { $Command -match '--id Balena.Etcher --exact' }
+    }
+    It 'honors disabled normal-user execution without falling back to elevation' {
+        $NoDeelevatedRetry = $true
+        Mock Invoke-Deelevated { throw 'must not start' }
+        (Invoke-WingetUpgrade -Id 'Balena.Etcher').ExitCode | Should -Be 1
+        Should -Invoke Invoke-Deelevated -Times 0 -Exactly
+    }
+}
+
 Describe 'Reviewed update boundaries' {
     It 'only upgrades explicitly selected IDs' {
         $r = Invoke-FakeWinget selected
