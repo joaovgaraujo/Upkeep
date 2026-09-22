@@ -224,9 +224,27 @@ function Get-InstallScope {
 }
 
 # One `winget upgrade` attempt. Returns exit code + combined output.
+$script:etcherWorkerAttempt = $null
 function Invoke-WingetUpgrade {
     param([string]$Id, [string[]]$Extra = @())
 
+    # Etcher's Squirrel bootstrapper can return success before its worker
+    # fails under elevation, leaving a partial app folder and the old ARP
+    # version. Run this per-user installer as the desktop user from the start.
+    if ($Id -eq 'Balena.Etcher' -and (Test-Elevated) -and (Get-InstallScope -Id $Id) -eq 'user') {
+        # A bootstrapper or timed-out worker may still be installing. Never
+        # launch another worker for this package during the same run.
+        if ($null -ne $script:etcherWorkerAttempt) { return $script:etcherWorkerAttempt }
+        if ($NoDeelevatedRetry) {
+            return [pscustomobject]@{ ExitCode = 1; Output = 'balenaEtcher requires a normal-user update; unelevated execution is disabled.' }
+        }
+        $worker = Invoke-Deelevated -Command 'winget upgrade --id Balena.Etcher --exact --include-unknown --silent --disable-interactivity --accept-source-agreements --accept-package-agreements'
+        if ($null -eq $worker) {
+            return [pscustomobject]@{ ExitCode = 1; Output = 'Could not start the normal-user balenaEtcher update.' }
+        }
+        $script:etcherWorkerAttempt = [pscustomobject]@{ ExitCode = $worker.ExitCode; Output = $worker.Output }
+        return $script:etcherWorkerAttempt
+    }
     $out = winget upgrade --id $Id --exact --include-unknown --silent --disable-interactivity `
         --accept-source-agreements --accept-package-agreements @Extra 2>&1 | Out-String
     [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $out }
@@ -253,7 +271,7 @@ Write-Host '[winget] Upgrading winget packages silently...'
 $upgradeExit = 0
 # `--all` would still reinstall anything the inventory filtered out, so any
 # exclusion switches to per-package upgrades of exactly what is listed.
-if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0) {
+if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher')) {
     $output = @()
     foreach ($id in @($before.Keys)) {
         if ($id -eq 'ElectronicArts.EADesktop') { continue }
@@ -297,6 +315,9 @@ foreach ($id in $stuck) {
     $attempt = Invoke-WingetUpgrade -Id $id
     $res = $attempt.Output
     $code = $attempt.ExitCode
+    if ($LogFile) {
+        try { $res | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
+    }
 
     # -1978335107 (0x8A15007D): winget refuses to touch a user-scope package
     # while elevated. Our elevation is the whole problem, so drop it and retry.
@@ -357,7 +378,7 @@ foreach ($id in $stuck) {
         Write-Host "[winget]   $id : blocked - the new version uses a different install technology. Uninstall it, then reinstall."
     }
     elseif ($code -eq 0) {
-        Write-Host "[winget]   $id : upgraded on the individual retry."
+        Write-Host "[winget]   $id : installer returned success; checking the installed version below."
     }
     else {
         $short = ($res -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
