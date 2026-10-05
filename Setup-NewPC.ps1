@@ -171,6 +171,17 @@ function Get-SettingString {
     return $Default
 }
 
+# Existence check for paths read from settings.json. Under
+# $ErrorActionPreference='Stop', PS 5.1's Test-Path THROWS "Access is denied"
+# (instead of returning $false) for a path inside another user's profile --
+# e.g. an SDIOPath saved while running as a different Windows account. That
+# used to fail the whole Drivers phase; treat it as "not there" instead.
+function Test-SettingPath {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    try { return [bool](Test-Path -LiteralPath $Path) } catch { return $false }
+}
+
 # ---------------------------------------------------------------------------
 # Phase result tracking
 # ---------------------------------------------------------------------------
@@ -579,11 +590,9 @@ try {
 function Resolve-SdioExe {
     $dir = Get-SettingString 'SDIOPath'
     $candidates = @()
-    if ($dir) {
-        if ((Test-Path -LiteralPath $dir) -and $dir -match '\.exe$') { return $dir }
-        if (Test-Path -LiteralPath $dir) {
-            $candidates += Get-ChildItem -LiteralPath $dir -Filter 'SDIO*.exe' -ErrorAction SilentlyContinue
-        }
+    if (Test-SettingPath $dir) {
+        if ($dir -match '\.exe$') { return $dir }
+        $candidates += Get-ChildItem -LiteralPath $dir -Filter 'SDIO*.exe' -ErrorAction SilentlyContinue
     }
     $wingetPackages = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
     if (Test-Path -LiteralPath $wingetPackages) {
@@ -729,7 +738,7 @@ if ($SkipDrivers) {
         Add-PhaseResult 'Drivers (NVIDIA)' 'Skipped' 'no NVIDIA GPU'
     } else {
         $nvPkg = Get-SettingString 'NVCleanPackagePath'
-        if ($nvPkg -and (Test-Path -LiteralPath $nvPkg)) {
+        if (Test-SettingPath $nvPkg) {
             if ($DryRun) {
                 Write-Output "[drivers] [dry-run] Would run NVCleanstall package: $nvPkg -y -noreboot"
                 Add-PhaseResult 'Drivers (NVIDIA)' 'DryRun'
@@ -783,7 +792,7 @@ if (-not $Oosu) {
     # Config resolution for auto mode: the user's exported config wins, then
     # the bundled recommended preset shipped next to this script.
     $oosuCfg = Get-SettingString 'OOSUConfigPath'
-    if (-not ($oosuCfg -and (Test-Path -LiteralPath $oosuCfg))) {
+    if (-not (Test-SettingPath $oosuCfg)) {
         $bundled = Join-Path $PSScriptRoot (Join-Path 'presets' 'ooshutup10-recommended.cfg')
         $oosuCfg = if (Test-Path -LiteralPath $bundled) { $bundled } else { '' }
     }

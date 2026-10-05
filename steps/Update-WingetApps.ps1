@@ -202,6 +202,13 @@ if ($InventoryOnly) {
 # and a manifest that only ships a machine-scope installer will never apply to
 # it. Matched on the winget id's product half because ARP DisplayNames rarely
 # match the id ("ZedIndustries.Zed" -> "Zed").
+# winget unpacks portable packages into one folder per package id.
+function Test-WingetPortable {
+    param([string]$Id)
+    $root = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    [bool](Get-ChildItem -LiteralPath $root -Directory -Filter "$($Id)_*" -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+
 function Get-InstallScope {
     param([string]$Id)
 
@@ -269,24 +276,35 @@ Write-Host "[winget] $($before.Count) package(s) have upgrades available."
 
 Write-Host '[winget] Upgrading winget packages silently...'
 $upgradeExit = 0
+# Output is shown and logged as each package finishes, not once at the end:
+# a single slow installer (Rust's MSI took 19 minutes) otherwise leaves the
+# dashboard silent long enough to look hung, and a run stopped mid-pass then
+# left no log at all.
+function Write-StepOutput {
+    param([string[]]$Lines)
+    $Lines | Write-Host
+    if ($LogFile) {
+        try { $Lines | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
+    }
+}
 # `--all` would still reinstall anything the inventory filtered out, so any
 # exclusion switches to per-package upgrades of exactly what is listed.
 if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher')) {
-    $output = @()
-    foreach ($id in @($before.Keys)) {
-        if ($id -eq 'ElectronicArts.EADesktop') { continue }
+    $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' })
+    for ($i = 0; $i -lt $ids.Count; $i++) {
+        $id = $ids[$i]
+        $started = Get-Date
+        Write-StepOutput "[winget] ($($i + 1)/$($ids.Count)) $id $($before[$id].Current) -> $($before[$id].Available)..."
         $attempt = Invoke-WingetUpgrade -Id $id
-        $output += $attempt.Output
+        Write-StepOutput $attempt.Output
+        Write-StepOutput ("[winget] ({0}/{1}) {2} finished in {3:N0}s (exit {4})." -f ($i + 1), $ids.Count, $id, ((Get-Date) - $started).TotalSeconds, $attempt.ExitCode)
         if ($attempt.ExitCode -ne 0) { $upgradeExit = $attempt.ExitCode }
     }
 } else {
-    $output = winget upgrade --all --include-unknown --silent --disable-interactivity `
-        --accept-source-agreements --accept-package-agreements 2>&1 | ForEach-Object ToString
+    winget upgrade --all --include-unknown --silent --disable-interactivity `
+        --accept-source-agreements --accept-package-agreements 2>&1 |
+        ForEach-Object { Write-StepOutput $_.ToString() }
     $upgradeExit = $LASTEXITCODE
-}
-$output | Write-Host
-if ($LogFile) {
-    try { $output | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
 }
 
 $after = Get-PendingUpgrades
@@ -361,6 +379,26 @@ foreach ($id in $stuck) {
         }
     }
 
+    # -1978335212 (0x8A150014, NO_APPLICATIONS_FOUND) for a package the
+    # inventory just listed as upgradable: winget's upgrade correlation loses
+    # some portable packages (yt-dlp.FFmpeg, 2026-10) even unelevated, while
+    # `install --force` replaces them fine. Portable only - forcing an install
+    # over an MSI/EXE app could leave a second copy.
+    if ($code -eq -1978335212 -and (Test-WingetPortable -Id $id)) {
+        Write-Host "[winget]   $id : winget cannot match the installed portable package - reinstalling the new version with --force..."
+        $out = winget install --id $id --exact --force --silent --disable-interactivity `
+            --accept-source-agreements --accept-package-agreements 2>&1 | Out-String
+        $res = $out
+        $code = $LASTEXITCODE
+        if ($LogFile) {
+            try { $out | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
+        }
+        if ($code -eq 0) {
+            Write-Host "[winget]   $id : reinstalled at the new version."
+            continue
+        }
+    }
+
     # 0x8A15002B = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE (-1978335189)
     if ($code -eq -1978335189 -or $res -match 'No applicable upgrade found') {
         $scope = Get-InstallScope -Id $id
@@ -374,8 +412,11 @@ foreach ($id in $stuck) {
         }
         $notApplicable += $id
     }
-    elseif ($res -match 'different install technology') {
-        Write-Host "[winget]   $id : blocked - the new version uses a different install technology. Uninstall it, then reinstall."
+    # 0x8A15008E = APPINSTALLER_CLI_ERROR_UPDATE_INSTALL_TECHNOLOGY_MISMATCH
+    # (-1978335090), e.g. draw.io dropped its MSI. The code survives localized
+    # winget output; the message text does not.
+    elseif ($code -eq -1978335090 -or $res -match 'different install technology') {
+        Write-Host "[winget]   $id : blocked - the new version uses a different install technology (e.g. MSI -> EXE). Reinstall once with: winget uninstall --id $id -e; winget install --id $id -e"
     }
     elseif ($code -eq 0) {
         Write-Host "[winget]   $id : installer returned success; checking the installed version below."

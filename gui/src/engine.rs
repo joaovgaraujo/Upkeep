@@ -318,6 +318,20 @@ fn run_and_stream(
     drop(line_tx);
 
     let mut state = SummaryState::default();
+    // Every line also goes to a timestamped file as it arrives, so a run that
+    // is stopped or killed mid-step still leaves its full trail behind.
+    let mut log = crate::session_log::SessionLog::create();
+    if let Some(log) = &log {
+        let _ = tx.send(AppEvent::LogLine(format!(
+            "[log] Live session log: {}",
+            log.path().display()
+        )));
+    }
+    let mut log_line = |line: &str| {
+        if let Some(log) = log.as_mut() {
+            log.line(line);
+        }
+    };
     // Set the first time the child is seen to have exited: its status, plus
     // the instant after which we stop waiting for buffered output to drain.
     let mut exited: Option<(std::process::ExitStatus, Instant)> = None;
@@ -329,6 +343,7 @@ fn run_and_stream(
         if stop.load(Ordering::Relaxed) {
             // The child is cmd.exe; the .bat and everything it launched are
             // its descendants, so only a TREE kill actually stops the run.
+            log_line("[engine] Stop requested (Stop button or window closed) - killing the update process tree.");
             kill_tree(child);
             wait_bounded(child, KILL_GRACE);
             break None;
@@ -339,6 +354,7 @@ fn run_and_stream(
         // keypress that will never come from a headless spawn.
         if let Some(deadline) = state.summary_deadline {
             if Instant::now() >= deadline {
+                log_line("[engine] Summary printed; closing the finished update process.");
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
@@ -346,8 +362,14 @@ fn run_and_stream(
         }
 
         match line_rx.recv_timeout(Duration::from_millis(150)) {
-            Ok(RawLine::Out(raw)) => process_line(&raw, false, tx, ctx, &mut state),
-            Ok(RawLine::Err(raw)) => process_line(&raw, true, tx, ctx, &mut state),
+            Ok(RawLine::Out(raw)) => {
+                log_line(&strip_ansi(&raw));
+                process_line(&raw, false, tx, ctx, &mut state);
+            }
+            Ok(RawLine::Err(raw)) => {
+                log_line(&format!("[stderr] {}", strip_ansi(&raw)));
+                process_line(&raw, true, tx, ctx, &mut state);
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 // Both reader threads have finished, meaning every process
@@ -383,6 +405,12 @@ fn run_and_stream(
         Some(status) => status.code().map_or(EngineExit::Stopped, EngineExit::Code),
         None => EngineExit::Stopped,
     };
+    log_line(&match exit {
+        EngineExit::Code(code) => format!("[engine] Update process exited with code {code}."),
+        EngineExit::Stopped => {
+            "[engine] Update process ended without an exit code (stopped).".to_string()
+        }
+    });
 
     // Flush a held `========` line that never got its lookahead line (the
     // process exited right after printing it) as a plain log line.

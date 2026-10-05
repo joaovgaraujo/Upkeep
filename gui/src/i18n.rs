@@ -327,6 +327,12 @@ pub struct Strings {
     pub reboot_dialog_proceed: &'static str,
     pub reboot_dialog_cancel: &'static str,
 
+    // -- Close-while-running dialog -------------------------------------------
+    pub close_dialog_title: &'static str,
+    pub close_dialog_body: &'static str,
+    pub close_dialog_keep: &'static str,
+    pub close_dialog_stop: &'static str,
+
     // -- NVCleanstall help dialog --------------------------------------------
     pub nvclean_help_title: &'static str,
     pub nvclean_help_intro: &'static str,
@@ -579,6 +585,12 @@ pub static EN: Strings = Strings {
     reboot_dialog_proceed: "Proceed anyway",
     reboot_dialog_cancel: "Cancel",
 
+    close_dialog_title: "Update still running",
+    close_dialog_body:
+        "Closing Upkeep stops the update immediately, including any installer in progress. Long installers (Rust, CMake, Visual Studio) can take 10-20 minutes with no new output - that is normal.",
+    close_dialog_keep: "Keep running",
+    close_dialog_stop: "Stop and close",
+
     nvclean_help_title: "NVCleanstall: one-time setup needed",
     nvclean_help_intro: "NVCleanstall has no CLI for driver selection. To enable unattended runs:",
     nvclean_help_step1: "1. Open NVCleanstall once.",
@@ -828,6 +840,12 @@ pub static PT_BR: Strings = Strings {
         "Foi detectada uma reinicializa\u{e7}\u{e3}o pendente. Executar atualiza\u{e7}\u{f5}es nesse estado pode causar problemas.",
     reboot_dialog_proceed: "Continuar mesmo assim",
     reboot_dialog_cancel: "Cancelar",
+
+    close_dialog_title: "Atualiza\u{e7}\u{e3}o em andamento",
+    close_dialog_body:
+        "Fechar o Upkeep interrompe a atualiza\u{e7}\u{e3}o imediatamente, incluindo qualquer instalador em execu\u{e7}\u{e3}o. Instaladores longos (Rust, CMake, Visual Studio) podem levar 10-20 minutos sem nova sa\u{ed}da - isso \u{e9} normal.",
+    close_dialog_keep: "Continuar executando",
+    close_dialog_stop: "Parar e fechar",
 
     nvclean_help_title: "NVCleanstall: configura\u{e7}\u{e3}o \u{fa}nica necess\u{e1}ria",
     nvclean_help_intro:

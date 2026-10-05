@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][string]$ResultFile,
     [string]$LogFile,
     [ValidateRange(1,3)][int]$MaxParallel = 3,
-    [ValidateRange(1,7200)][int]$TimeoutSec = 3900
+    [ValidateRange(1,7200)][int]$TimeoutSec = 3900,
+    [ValidateRange(1,3600)][int]$HeartbeatSec = 300
 )
 $ErrorActionPreference = 'Stop'
 $skipJDownloader = if ($env:DASHBOARD_SKIP_OTHER_APPS -eq '1') { '1' } else { $env:DASHBOARD_SKIP_APPS }
@@ -20,9 +21,47 @@ foreach ($spec in $specs) { if ($spec.Skip -ne '1') { $pending.Enqueue($spec) } 
 $active = [Collections.ArrayList]::new()
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('Upkeep-clients-' + [guid]::NewGuid())
 [IO.Directory]::CreateDirectory($scratch) | Out-Null
+. (Join-Path $PSScriptRoot 'Stream-Process.ps1')
+# Under $ErrorActionPreference='Stop' a bare Add-Content used to throw when
+# anything had the log open, killing every client worker with exit 1.
 function Write-ClientLog([string]$Line) {
     Write-Host $Line
-    if ($LogFile) { Add-Content -LiteralPath $LogFile -Value $Line -Encoding UTF8 }
+    Add-LogLine $LogFile $Line
+}
+# Workers' output used to be read only after each one exited - up to
+# TimeoutSec silent minutes (Steam patching a big game). Tail the redirect
+# files instead: forward complete lines as they appear, keeping a partial
+# trailing line until its newline arrives. The files are shared for writing
+# by the worker, so open them ReadWrite.
+function Read-WorkerOutput($Worker, [switch]$Final) {
+    foreach ($key in 'Out', 'Err') {
+        $path = $Worker[$key]
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $stream = $null
+        try {
+            $stream = [IO.File]::Open($path, 'Open', 'Read', 'ReadWrite')
+            $offsetKey = $key + 'Offset'
+            $pendingKey = $key + 'Pending'
+            if ($stream.Length -le $Worker[$offsetKey]) { $text = '' } else {
+                $null = $stream.Seek($Worker[$offsetKey], 'Begin')
+                $bytes = New-Object byte[] ($stream.Length - $Worker[$offsetKey])
+                $read = $stream.Read($bytes, 0, $bytes.Length)
+                $Worker[$offsetKey] += $read
+                $text = [Text.Encoding]::Default.GetString($bytes, 0, $read)
+            }
+            $text = $Worker[$pendingKey] + $text
+            $parts = $text -split "`r?`n"
+            $Worker[$pendingKey] = if ($Final) { '' } else { $parts[-1] }
+            # Not $parts[0..($parts.Count - 2)]: with one part that is 0..-1,
+            # which selects the partial line itself (twice).
+            $complete = if ($Final) { $parts } elseif ($parts.Count -gt 1) { $parts[0..($parts.Count - 2)] } else { @() }
+            foreach ($line in $complete) { if ($line -ne '') { Write-ClientLog $line; $Worker.LastOutput = [datetime]::UtcNow } }
+        } catch {
+            # The worker may be mid-write; the next poll picks it up.
+        } finally {
+            if ($stream) { $stream.Dispose() }
+        }
+    }
 }
 try {
     while ($pending.Count -or $active.Count) {
@@ -39,15 +78,26 @@ try {
                     -RedirectStandardOutput $out -RedirectStandardError $err
                 # Force acquisition of a process handle before it exits.
                 $null = $proc.Handle
-                $null = $active.Add(@{ Spec=$spec; Process=$proc; Out=$out; Err=$err; Started=[datetime]::UtcNow })
+                $now = [datetime]::UtcNow
+                $null = $active.Add(@{ Spec=$spec; Process=$proc; Out=$out; Err=$err; Started=$now; LastOutput=$now; Heartbeat=$now
+                    OutOffset=0L; ErrOffset=0L; OutPending=''; ErrPending='' })
                 Write-ClientLog "[clients] Started $($spec.Name)."
                 Write-ClientLog "[$($spec.Tag)] Update worker running."
             } catch { Write-ClientLog "[error] $($spec.Name): $_" }
         }
         foreach ($worker in @($active.ToArray())) {
             $proc = $worker.Process
-            $timedOut = ([datetime]::UtcNow - $worker.Started).TotalSeconds -ge $TimeoutSec
-            if (-not $proc.HasExited -and -not $timedOut) { continue }
+            Read-WorkerOutput $worker
+            $now = [datetime]::UtcNow
+            $timedOut = ($now - $worker.Started).TotalSeconds -ge $TimeoutSec
+            if (-not $proc.HasExited -and -not $timedOut) {
+                $quiet = $now - (@($worker.LastOutput, $worker.Heartbeat) | Sort-Object)[-1]
+                if ($quiet.TotalSeconds -ge $HeartbeatSec) {
+                    Write-ClientLog ("[{0}] still running ({1:N0} min elapsed)..." -f $worker.Spec.Tag, [math]::Floor(($now - $worker.Started).TotalMinutes))
+                    $worker.Heartbeat = $now
+                }
+                continue
+            }
             if (-not $proc.HasExited) {
                 & taskkill.exe /T /F /PID $proc.Id 2>&1 | Out-Null
                 $null = $proc.WaitForExit(5000)
@@ -55,12 +105,8 @@ try {
             } else {
                 $results[$worker.Spec.Name] = switch ($proc.ExitCode) { 0 {'ok'} 2 {'skipped'} default {'error'} }
             }
-            foreach ($path in @($worker.Out, $worker.Err)) {
-                if (Test-Path -LiteralPath $path) {
-                    foreach ($line in Get-Content -LiteralPath $path) { Write-ClientLog $line }
-                }
-            }
-            Write-ClientLog "[clients] $($worker.Spec.Name): $($results[$worker.Spec.Name])"
+            Read-WorkerOutput $worker -Final
+            Write-ClientLog ("[clients] {0}: {1} (after {2:N0} min)" -f $worker.Spec.Name, $results[$worker.Spec.Name], [math]::Floor(([datetime]::UtcNow - $worker.Started).TotalMinutes))
             $proc.Dispose()
             $active.Remove($worker)
         }

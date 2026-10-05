@@ -87,10 +87,13 @@ foreach ($lib in $libraries) {
     foreach ($acf in Get-ChildItem -Path $lib -Filter 'appmanifest_*.acf' -File -ErrorAction SilentlyContinue) {
         if ($acf.Name -match 'appmanifest_(\d+)\.acf') { $appIds += $Matches[1] }
         try {
-            $content = Get-Content -LiteralPath $acf.FullName -Raw
+            # [IO.File], not Get-/Set-Content: on PowerShell 5.1 those read
+            # the UTF-8 manifest as ANSI (mangling non-ASCII game names) and
+            # write it back with a BOM Steam's parser does not expect.
+            $content = [IO.File]::ReadAllText($acf.FullName)
             $content = $content -replace '"StateFlags"\s+"\d+"', '"StateFlags"		"6"'
             $content = $content -replace '"AutoUpdateBehavior"\s+"\d+"', '"AutoUpdateBehavior"		"0"'
-            Set-Content -LiteralPath $acf.FullName -Value $content -NoNewline -Encoding UTF8
+            [IO.File]::WriteAllText($acf.FullName, $content)
         }
         catch {
             Write-Host "[steam] Could not patch $($acf.Name): $($_.Exception.Message)"
