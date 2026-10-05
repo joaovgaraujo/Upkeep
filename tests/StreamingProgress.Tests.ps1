@@ -7,8 +7,12 @@ BeforeAll {
     function Start-Step {
         param([string]$Script, [string[]]$Arguments)
         $argLine = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$Script`"") + $Arguments
-        Start-Process -FilePath $windowsPowerShell -ArgumentList $argLine -PassThru -WindowStyle Hidden `
+        $proc = Start-Process -FilePath $windowsPowerShell -ArgumentList $argLine -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput (Join-Path $TestDrive ([guid]::NewGuid().ToString() + '.out'))
+        # Windows PowerShell 5.1 (what CI runs Pester under) only reports
+        # .ExitCode if the handle was acquired while the process was alive.
+        $null = $proc.Handle
+        $proc
     }
 
     function Wait-ForText {
