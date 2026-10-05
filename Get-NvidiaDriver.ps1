@@ -45,6 +45,15 @@ $ErrorActionPreference = 'Stop'
 $lookup = 'https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php' +
     '?func=DriverManualLookup&psid=127&pfid=995&osID=57&languageCode=1033&beta=0&isWHQL=1&dltype=-1&dch=1&upCRD=0&qnf=0&sort1=0&numberOfResults=1'
 
+# The lookup below is GPU-agnostic, so without this a PC with only Intel/AMD
+# graphics would download ~700 MB and run NVIDIA's setup for nothing.
+$nvidiaGpu = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match 'NVIDIA' -or $_.AdapterCompatibility -match 'NVIDIA' })
+if (-not $nvidiaGpu.Count) {
+    Write-Output "[nvidia] No NVIDIA GPU found on this PC - nothing to install."
+    exit 2
+}
+Write-Output "[nvidia] GPU: $($nvidiaGpu[0].Name)"
 Write-Output "[nvidia] Querying NVIDIA for the newest Game Ready driver..."
 $resp = Invoke-RestMethod -Uri $lookup
 $driver = $resp.IDS[0].downloadInfo

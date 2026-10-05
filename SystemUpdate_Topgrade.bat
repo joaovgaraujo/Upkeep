@@ -315,28 +315,16 @@ rem    NOTE: these two sets must stay OUTSIDE the if-block below. %VAR% inside
 rem    a parenthesized block expands at parse time (before the set runs), which
 rem    would turn WaitForExit(%TOPGRADE_TIMEOUT_MIN% * 60000) into a PowerShell
 rem    parse error and silently skip topgrade entirely.
-rem    Uses [Diagnostics.Process]::Start rather than Start-Process: in
-rem    Windows PowerShell 5.1 a `Start-Process -PassThru` object WITHOUT
-rem    -Wait never populates .ExitCode (verified - it comes back empty), so
-rem    topgrade's real status was unobtainable and %errorLevel% ended up
-rem    reflecting whatever the last statement did. Reading the two pipes with
-rem    ReadToEndAsync also removes the .raw/.err temp files entirely.
-rem    [char]34 builds the quotes around the config path without fighting
-rem    batch's own quoting, so a path with spaces still works.
+rem    steps\Invoke-Topgrade.ps1 streams topgrade's output line by line (with
+rem    a "still running" heartbeat) instead of collecting it and printing it
+rem    only after topgrade exits - up to TOPGRADE_TIMEOUT_MIN silent minutes,
+rem    lost entirely if the run was stopped. It exits with topgrade's own
+rem    status (1 on timeout), so RC below reflects topgrade, not the wrapper.
 set "TOPGRADE_TIMEOUT_MIN=45"
 if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
-powershell -NoProfile -Command ^
-  "$psi = New-Object Diagnostics.ProcessStartInfo;" ^
-  "$psi.FileName = 'topgrade';" ^
-  "$psi.Arguments = '--config ' + [char]34 + '%TGCONF_PS%' + [char]34;" ^
-  "$psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true;" ^
-  "$p = [Diagnostics.Process]::Start($psi);" ^
-  "$so = $p.StandardOutput.ReadToEndAsync(); $se = $p.StandardError.ReadToEndAsync();" ^
-  "$exited = $p.WaitForExit(%TOPGRADE_TIMEOUT_MIN% * 60000);" ^
-  "if (-not $exited) { Write-Host ''; Write-Host ('[timeout] topgrade exceeded {0} minutes - killing it and moving on.' -f %TOPGRADE_TIMEOUT_MIN%); try { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null } catch {}; try { $p.Kill() } catch {}; $p.WaitForExit(5000) | Out-Null };" ^
-  "$code = if ($exited) { $p.ExitCode } else { 1 };" ^
-  "foreach ($t in @($so, $se)) { if ($t.Wait(10000) -and $t.Result) { $t.Result | Write-Host; $t.Result | Out-File -FilePath '%LOGFILE_PS%' -Append -Encoding utf8 } };" ^
-  "exit $code"
+echo.
+echo [topgrade] Running topgrade ^(limit %TOPGRADE_TIMEOUT_MIN% min^)...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-Topgrade.ps1" -ConfigPath "%TGCONF%" -LogFile "%LOGFILE%" -TimeoutMin %TOPGRADE_TIMEOUT_MIN%
 )
 
 if not "%DASHBOARD_SKIP_APPS%"=="1" (set "RC=!errorLevel!") else (set "RC=0")
@@ -357,23 +345,10 @@ if not "%DASHBOARD_SKIP_WINUPDATE%"=="1" (
 echo.
 echo [winupdate] Installing Windows updates (this can take a while^)...
 set "WU_STATUS=ok"
-rem    -ExecutionPolicy Bypass is REQUIRED, not decorative: this machine has
-rem    no execution policy set in any scope, which means Restricted, and the
-rem    job below does Import-Module PSWindowsUpdate -- loading a .psm1 from
-rem    disk, which Restricted forbids. Without it the job fails every single
-rem    run with "PSWindowsUpdate.psm1 cannot be loaded because running
-rem    scripts is disabled on this system", so Windows Update reported error
-rem    even when Windows had nothing to install. The flag is inherited by the
-rem    Start-Job child process, which is where the import actually happens.
-rem    Note the install at the top of this script already passes Bypass --
-rem    that is why the module installs fine but never loads.
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$job = Start-Job -ScriptBlock { Import-Module PSWindowsUpdate -ErrorAction Stop; Install-WindowsUpdate -MicrosoftUpdate -AcceptAll -IgnoreReboot -ErrorAction Stop -Verbose 2>&1 | Out-String };" ^
-  "$done = Wait-Job $job -Timeout (%WU_TIMEOUT_MIN% * 60);" ^
-  "$code = 0;" ^
-  "if (-not $done) { Write-Host ('[timeout] Windows Update exceeded {0} minutes - moving on.' -f %WU_TIMEOUT_MIN%); $code = 1 } else { Receive-Job $job -ErrorAction SilentlyContinue | Write-Host; if ($job.State -eq 'Failed') { $code = 1; foreach ($cj in $job.ChildJobs) { foreach ($e in $cj.Error) { Write-Host ('[error] ' + $e.Exception.Message) }; if ($cj.JobStateInfo.Reason) { Write-Host ('[error] ' + $cj.JobStateInfo.Reason.Message) } }; Write-Host '[warn] Windows Update job failed - see the [error] lines above.' } };" ^
-  "Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue;" ^
-  "exit $code"
+rem    steps\Invoke-WindowsUpdate.ps1 streams PSWindowsUpdate's progress as it
+rem    happens. -ExecutionPolicy Bypass is REQUIRED: with no policy set
+rem    (Restricted) the job cannot Import-Module PSWindowsUpdate.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-WindowsUpdate.ps1" -LogFile "%LOGFILE%" -TimeoutMin %WU_TIMEOUT_MIN%
 if "!errorLevel!"=="2" (set "WU_STATUS=skipped") else if not "!errorLevel!"=="0" set "WU_STATUS=error"
 )
 

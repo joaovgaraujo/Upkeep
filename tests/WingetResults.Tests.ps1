@@ -2,7 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1" $case
@@ -30,6 +30,11 @@ function winget {
     if ($args -contains '--all') {
         if ('SCENARIO' -eq 'bulk-error') { $global:LASTEXITCODE = 1 }
         return
+    }
+    if ('SCENARIO' -eq 'portable-lost') {
+        # winget lists the portable package as upgradable but `upgrade --id` cannot match it.
+        if ($args[0] -eq 'install' -and $args -contains '--force') { $global:normalUpdated = $true; 'Successfully installed'; return }
+        if ($args -contains '--id') { $global:LASTEXITCODE = -1978335212; 'No installed package found matching input criteria.'; return }
     }
     if ($args -contains '--id' -and 'SCENARIO' -like 'nonadmin*') { $global:LASTEXITCODE = -1978335146; 'localized refusal'; return }
     if ($args -contains '--id') { $global:LASTEXITCODE = 1; 'fixture installer failed'; return }
@@ -65,6 +70,7 @@ function winget {
 }
 try {
 if ('SCENARIO' -eq 'inventory') { & "$PSScriptRoot\Update-WingetApps.ps1" -InventoryOnly; exit $LASTEXITCODE }
+if ('SCENARIO' -eq 'portable-lost') { New-Item "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Fixture.App_Microsoft.Winget.Source_8wekyb3d8bbwe" -ItemType Directory -Force | Out-Null }
 if ('SCENARIO' -eq 'selected') { $env:UPKEEP_SELECTED_IDS = '["Fixture.App"]' }
 if ('SCENARIO' -eq 'empty-selection') { $env:UPKEEP_SELECTED_IDS = '[]' }
 if ('SCENARIO' -eq 'ignored') {
@@ -156,9 +162,23 @@ Describe 'Etcher per-user installer' {
     }
 }
 
+Describe 'Portable package winget cannot match for upgrade' {
+    It 'reinstalls it with --force and confirms with another inventory' {
+        $r = Invoke-FakeWinget portable-lost
+        $r.Code | Should -Be 0
+        $r.Calls | Should -Match 'install --id Fixture.App --exact --force'
+        $r.Output | Should -Match 'reinstalled at the new version'
+    }
+    It 'does not force-install a non-portable app that winget cannot match' {
+        $r = Invoke-FakeWinget pending
+        $r.Calls | Should -Not -Match 'install --id'
+    }
+}
+
 Describe 'Reviewed update boundaries' {
     It 'only upgrades explicitly selected IDs' {
         $r = Invoke-FakeWinget selected
+        $r.Output | Should -Match '\(1/1\) Fixture.App 1 -> 2'
         $r.Calls | Should -Match '--id Fixture.App'
         $r.Calls | Should -Not -Match '--all|--id Fixture.Other'
     }

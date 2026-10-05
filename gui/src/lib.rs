@@ -13,6 +13,7 @@ pub mod optimize;
 pub mod pins;
 pub mod reboot;
 pub mod self_update;
+pub mod session_log;
 pub mod settings;
 pub mod system;
 pub mod theme;

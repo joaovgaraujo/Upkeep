@@ -159,6 +159,10 @@ pub struct DashboardApp {
 
     reboot: RebootFlags,
     show_reboot_confirm: bool,
+    /// Set when the window was asked to close mid-run; the close is held
+    /// until the user confirms, because closing tree-kills the update.
+    show_close_confirm: bool,
+    close_confirmed: bool,
 
     page: Page,
     active_tab: Tab,
@@ -351,6 +355,8 @@ impl DashboardApp {
             toast_sent: false,
             reboot: reboot::check_pending_reboot(),
             show_reboot_confirm: false,
+            show_close_confirm: false,
+            close_confirmed: false,
             page: Page::Update,
             active_tab: Tab::Log,
             pins,
@@ -1551,6 +1557,8 @@ impl DashboardApp {
             }
         });
 
+        self.intercept_close(ctx);
+        self.draw_close_dialog(ctx);
         self.draw_reboot_dialog(ctx);
         self.draw_update_confirmation(ctx);
         self.draw_nvclean_help(ctx);
@@ -4727,6 +4735,49 @@ impl DashboardApp {
             let _ = tx.send(AppEvent::ServiceList(list));
             ctx.request_repaint();
         });
+    }
+
+    /// Closing the window stops the run (`on_exit` tree-kills it), which also
+    /// cuts off whatever installer is mid-flight. Hold the close and ask.
+    fn intercept_close(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && self.is_running && !self.close_confirmed
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.show_close_confirm = true;
+        }
+    }
+
+    fn draw_close_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_close_confirm {
+            return;
+        }
+        if !self.is_running {
+            self.show_close_confirm = false;
+            return;
+        }
+        let t = self.tr();
+        let mut stop_and_close = false;
+        let mut keep = false;
+        let response = egui::Modal::new(egui::Id::new("close_confirmation")).show(ctx, |ui| {
+            ui.heading(t.close_dialog_title);
+            ui.label(t.close_dialog_body);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(t.close_dialog_keep).clicked() {
+                    keep = true;
+                }
+                if ui.button(t.close_dialog_stop).clicked() {
+                    stop_and_close = true;
+                }
+            });
+        });
+        if stop_and_close {
+            self.show_close_confirm = false;
+            self.close_confirmed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if keep || response.should_close() {
+            self.show_close_confirm = false;
+        }
     }
 
     fn draw_reboot_dialog(&mut self, ctx: &egui::Context) {

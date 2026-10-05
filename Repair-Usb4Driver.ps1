@@ -58,12 +58,22 @@ foreach ($dev in $wrong) {
 # it and would pull the controller driver back in.
 $packages = New-Object System.Collections.Generic.List[object]
 $current = @{}
+# pnputil's labels are localized ("Published Name:" is "Nome Publicado:" on
+# pt-BR), so parse by VALUE like drivers.rs: an oemNN.inf value starts a
+# package, and the next *.inf value in that block is its original name.
 foreach ($line in (pnputil /enum-drivers)) {
-    if ($line -match '^\s*Published Name:\s*(\S+)') { $current = @{ Published = $Matches[1] } }
-    elseif ($line -match '^\s*Original Name:\s*(\S+)') {
+    if ($line -match ':\s*(oem\d+\.inf)\s*$') { $current = @{ Published = $Matches[1] } }
+    elseif ($current.Published -and -not $current.Original -and $line -match ':\s*(\S+\.inf)\s*$') {
         $current.Original = $Matches[1]
         if ($current.Original -match '^tbt.*\.inf$') { $packages.Add([pscustomobject]$current) }
     }
+}
+
+# A wrong driver is bound (checked above), so finding no package means the
+# output was not understood. Say so instead of rescanning and reporting a fix.
+if ($packages.Count -eq 0) {
+    Write-Output "[usb4] ERROR: could not find the Intel Thunderbolt driver packages in 'pnputil /enum-drivers' output - nothing changed."
+    exit 1
 }
 
 if ($DryRun) {

@@ -6,7 +6,7 @@ BeforeAll {
             [string]$JD = 'exit 0', [string]$Steam = 'exit 0')
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
-        Copy-Item "$repoRoot\steps\Invoke-ClientUpdates.ps1" $case
+        Copy-Item "$repoRoot\steps\Invoke-ClientUpdates.ps1", "$repoRoot\steps\Stream-Process.ps1" $case
         Set-Content "$case\Update-StoreApps.ps1" $Store
         Set-Content "$case\Update-JDownloader.ps1" $JD
         Set-Content "$case\Update-SteamGames.ps1" $Steam

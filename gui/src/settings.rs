@@ -169,10 +169,37 @@ fn path_ok(p: &str) -> bool {
     !p.is_empty() && Path::new(p).exists()
 }
 
+/// True when `path` lives in a different Windows account's profile than
+/// `user_profile` (e.g. `C:\Users\Other\...` while running as
+/// `C:\Users\Me`). Such a value was saved by another account sharing this
+/// install. Elevated, Upkeep can often still SEE that folder, so `path_ok`
+/// alone keeps it and launches the other account's copy; unelevated scripts
+/// get "Access is denied" from it.
+fn in_other_profile(path: &str, user_profile: &str) -> bool {
+    let Some(users_root) = Path::new(user_profile).parent() else {
+        return false;
+    };
+    let lower = |p: &Path| p.to_string_lossy().to_lowercase().replace('/', "\\");
+    let path = lower(Path::new(path));
+    let users_root = format!("{}\\", lower(users_root).trim_end_matches('\\'));
+    let mine = format!(
+        "{}\\",
+        lower(Path::new(user_profile)).trim_end_matches('\\')
+    );
+    path.starts_with(&users_root) && !path.starts_with(&mine)
+}
+
 /// Best-effort discovery of common tool install locations, mirroring
 /// Functions.ps1's Get-AutoDiscoveredToolPaths. Only fills gaps; never
 /// overwrites a value the user already configured (and that still exists).
 fn autodiscover(root: &Path, settings: &mut Settings) {
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        for path in [&mut settings.sdio_path, &mut settings.nvclean_path] {
+            if in_other_profile(path, &profile) {
+                path.clear();
+            }
+        }
+    }
     // Portable NVCleanstall dropped in by Get-NVCleanstall.ps1.
     if !path_ok(&settings.nvclean_path) {
         let c = root.join("tools").join("NVCleanstall.exe");
@@ -286,6 +313,21 @@ fn autodiscover(root: &Path, settings: &mut Settings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_paths_in_another_accounts_profile_are_stale() {
+        let me = "C:\\Users\\Evelin";
+        let sdio = "\\AppData\\Local\\Microsoft\\WinGet\\Packages\\GlennDelahoy.SnappyDriverInstallerOrigin_x";
+        assert!(in_other_profile(
+            &format!("C:\\Users\\EvelinLimeira{sdio}"),
+            me
+        ));
+        assert!(!in_other_profile(&format!("C:\\Users\\Evelin{sdio}"), me));
+        assert!(!in_other_profile(&format!("c:\\users\\evelin{sdio}"), me));
+        assert!(!in_other_profile("C:\\SDIO", me));
+        assert!(!in_other_profile("C:\\Program Files\\SDIO", me));
+        assert!(!in_other_profile("", me));
+    }
 
     #[test]
     fn deserializes_known_keys_and_preserves_unknown_ones() {
