@@ -1,6 +1,8 @@
-# Upkeep 1.8.1
+# Upkeep 1.8.2
 
 Apps that winget cannot update on this PC are now listed at the end of the run with the reason and the fix, instead of turning the winget and topgrade rows red. Claude Code and the Codex CLI are updated through whichever channel installed them.
+
+The v1.8.1 tag was never published: one test failed on GitHub's runners, so the release workflow stopped before building. 1.8.2 is that release plus the test fix.
 
 ## Apps that need a manual update are listed, not failed
 
@@ -32,4 +34,5 @@ The updates run as the normal desktop user, because all of these installs live i
 - All 150 PowerShell tests passed, 13 of them new: the winget scenarios for an installer-type change, Edge and a genuine failure, closing Epic, the end-of-run list, holding and releasing the Git pin, and the npm path of the CLI step.
 - Three tests in `tests/FeatureUpdate.Tests.ps1` had depended on the test machine's real pending-restart flag and failed whenever a restart was pending. Tests that substitute the job bodies now ignore that flag, and a dry run reports a pending restart and continues instead of stopping.
 - A full elevated engine run on Windows 11 25H2 (26200.9457) with the 26H2 enablement package staged reported `ok` for winget, AI CLIs, topgrade, Windows Update, Store, Steam and JDownloader, and `ok - restart required` for the feature update.
+- The npm test for the CLI step passed locally but failed on GitHub's runners, which run elevated. The step loads `Deelevate.ps1`, which replaced the test's stub of `Test-Elevated`, so the update went through the de-elevated worker and never reached the fake npm. The stub is now appended to the test's copy of `Deelevate.ps1`, as the winget tests already do.
 - `release.yml` published every release with `docs/RELEASE-1.7.2.md` as its body, so the 1.8.0 release page showed the 1.7.2 notes. It now uses the notes file matching the tag.

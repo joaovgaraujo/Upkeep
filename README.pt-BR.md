@@ -62,7 +62,7 @@ vale entender:
   instaladores, e os downloads de jogos da Steam deixam de somar tempo ao
   total. Os gerenciadores de pacotes continuam sequenciais entre si.
 - **Apps que o winget não consegue atualizar aparecem listados, não como
-  erro (1.8.1).** Uma instalação por usuário cujo manifesto só oferece
+  erro (1.8.2).** Uma instalação por usuário cujo manifesto só oferece
   instalação para a máquina, um instalador que mudou de tipo (Sunshine, de
   NSIS para WiX) ou um app que se atualiza sozinho aparecem antes do resumo
   em "Needs a manual update", com o motivo e o comando para resolver. A linha
@@ -71,7 +71,7 @@ vale entender:
   rodar, atualiza instalações Inno por usuário, como o Zed, com o próprio
   instalador, deixa o Edge para o EdgeUpdate e segura o Git for Windows na
   execução enquanto o Git Bash ou outro programa da pasta dele estiver aberto.
-- **Claude Code e Codex CLI (1.8.1).** Atualizados pelo mesmo canal que os
+- **Claude Code e Codex CLI (1.8.2).** Atualizados pelo mesmo canal que os
   instalou: pacotes globais do npm com `npm install -g`, o instalador nativo
   do Claude Code e o instalador avulso do Codex com o próprio comando
   `update`. Instalações por winget, Chocolatey, Scoop e Loja ficam com essas
