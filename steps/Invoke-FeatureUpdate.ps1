@@ -301,9 +301,15 @@ try {
 
     # Servicing calls fail in confusing ways while a restart is pending, and an
     # enablement package is the last thing worth gambling on that.
-    if (Test-RebootPending) {
-        Write-FeatureLine 'A restart is already pending from an earlier update. Restart Windows, then run the upgrade again.'
-        exit 3
+    # Tests that substitute the job bodies never touch servicing, so the real
+    # machine's restart flag must not decide their outcome.
+    if (-not $underTest -and (Test-RebootPending)) {
+        if (-not $DryRun) {
+            Write-FeatureLine 'A restart is already pending from an earlier update. Restart Windows, then run the upgrade again.'
+            exit 3
+        }
+        # A dry run changes nothing, so it can still show the rest of the plan.
+        Write-FeatureLine '[dry-run] a restart is pending; a real run would stop here until Windows restarts.'
     }
 
     if ($KeepDeferralPolicy) {

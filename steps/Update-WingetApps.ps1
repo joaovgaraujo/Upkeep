@@ -60,8 +60,14 @@
     Don't retry user-scope packages unelevated. Escape hatch for environments
     where registering a scheduled task is blocked by policy.
 
+    Packages winget structurally cannot move here (scope mismatch, a changed
+    install technology, apps that update themselves) are not failures: they
+    are written to Reports\manual-updates-winget.json and listed at the end of
+    the run by steps\Show-ManualUpdates.ps1, and the step exits 3.
+
 .NOTES
     Exit codes: 0 = pending packages were updated; 2 = winget is absent;
+    3 = everything that could be updated was, the rest needs a manual update;
     1 = inventory/upgrade failed or packages remain pending after retries.
 #>
 [CmdletBinding()]
@@ -191,6 +197,22 @@ function Get-NameVersion {
 }
 $script:versionGuarded = @{}
 
+# Installers that refuse to run while their app is open. The engine starts
+# Epic before this step (steps\Start-Launchers.ps1), so Epic's MSI always hit
+# its LaunchCondition "Epic Games Launcher is currently running" and failed
+# with 1603. Close the app, upgrade, then start it again the same way.
+$script:closeBeforeUpgrade = @{
+    'EpicGames.EpicGamesLauncher' = @{ Processes = @('EpicGamesLauncher', 'EpicWebHelper'); Main = 'EpicGamesLauncher'; Arguments = '-silent' }
+}
+
+# Apps that ship their own updater and that winget cannot move (Edge's
+# manifest switched install technology, 0x8A15008E). Never suggest a winget
+# uninstall for these; let the app's updater do it.
+$script:selfUpdating = @{
+    'Microsoft.Edge' = 'Edge updates itself. Open edge://settings/help to finish the update.'
+}
+$script:selfUpdateAttempt = @{}
+
 if ($InventoryOnly) {
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
     try { ConvertTo-Json -InputObject @((Get-PendingUpgrades).Values | Sort-Object Name) -Compress }
@@ -230,6 +252,83 @@ function Get-InstallScope {
     'unknown'
 }
 
+# Closes an app listed in $closeBeforeUpgrade. Returns how to start it again,
+# or $null when it was not running.
+function Stop-AppForUpgrade {
+    param([string]$Id)
+    $spec = $script:closeBeforeUpgrade[$Id]
+    if (-not $spec) { return $null }
+    $running = @(Get-Process -Name $spec.Processes -ErrorAction SilentlyContinue)
+    if (-not $running.Count) { return $null }
+    $main = $running | Where-Object { $_.ProcessName -eq $spec.Main } | Select-Object -First 1
+    $path = if ($main) { $main.Path } else { $null }
+    Write-Host "[winget]   $Id : closing $($spec.Main) so its installer can run..."
+    $running | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    [pscustomobject]@{ Path = $path; Arguments = $spec.Arguments }
+}
+
+# Runs the app's own updater instead of winget. Once per run per app.
+function Invoke-SelfUpdate {
+    param([string]$Id)
+    if ($script:selfUpdateAttempt.ContainsKey($Id)) { return $script:selfUpdateAttempt[$Id] }
+    $result = [pscustomobject]@{ ExitCode = 1; Output = $script:selfUpdating[$Id] }
+    if ($Id -eq 'Microsoft.Edge' -and (Test-Elevated)) {
+        # An on-demand install of the stable channel over an existing Edge is
+        # how EdgeUpdate itself updates it; profile and settings are kept.
+        # Needed because some debloat tools delete the MicrosoftEdgeUpdate*
+        # scheduled tasks, after which Edge never updates on its own.
+        $exe = Join-Path ${env:ProgramFiles(x86)} 'Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe'
+        if (Test-Path -LiteralPath $exe) {
+            Write-Host "[winget]   $Id : asking Edge's own updater to install the new version..."
+            $p = Start-Process -FilePath $exe -ArgumentList '/silent', '/install', '"appguid={56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}&appname=Microsoft%20Edge&needsadmin=True"' -Wait -PassThru
+            $result = [pscustomobject]@{ ExitCode = $p.ExitCode; Output = "EdgeUpdate exit $($p.ExitCode)" }
+        }
+    }
+    $script:selfUpdateAttempt[$Id] = $result
+    $result
+}
+
+# A per-user Inno Setup install (HKCU ARP key ending in _is1) whose manifest
+# only declares a machine-scope installer: winget refuses the upgrade, but the
+# installer itself is per-user and upgrades in place with /CURRENTUSER. Zed is
+# the live example. winget download still verifies the manifest hash, and the
+# file must carry a valid Authenticode signature before it is run.
+function Update-UserScopeInno {
+    param([string]$Id)
+    $product = ($Id -split '\.')[-1]
+    if (-not $product) { return $false }
+    $arp = Get-ChildItem 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSChildName -like '*_is1' -and "$((Get-ItemProperty -LiteralPath $_.PSPath).DisplayName)" -match [regex]::Escape($product) } |
+        Select-Object -First 1
+    if (-not $arp) { return $false }
+
+    $dir = Join-Path $env:TEMP ('Upkeep_dl_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        Write-Host "[winget]   $Id : per-user Inno install - downloading the installer to update it per-user..."
+        $out = winget download --id $Id --exact --download-directory $dir --accept-source-agreements `
+            --accept-package-agreements --disable-interactivity 2>&1 | Out-String
+        if ($LogFile) { try { $out | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {} }
+        $exe = Get-ChildItem -LiteralPath $dir -Filter '*_inno_*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $exe) { return $false }
+        if ((Get-AuthenticodeSignature -LiteralPath $exe.FullName).Status -ne 'Valid') {
+            Write-Host "[winget]   $Id : downloaded installer is not validly signed - not running it."
+            return $false
+        }
+        $path = $exe.FullName.Replace("'", "''")
+        $run = "`$p = Start-Process -FilePath '$path' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER' -Wait -PassThru; `$global:LASTEXITCODE = `$p.ExitCode"
+        if (Test-Elevated) {
+            if ($NoDeelevatedRetry) { return $false }
+            $r = Invoke-Deelevated -Command $run
+            return ($null -ne $r -and $r.ExitCode -eq 0)
+        }
+        Invoke-Expression $run
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # One `winget upgrade` attempt. Returns exit code + combined output.
 $script:etcherWorkerAttempt = $null
 function Invoke-WingetUpgrade {
@@ -252,14 +351,36 @@ function Invoke-WingetUpgrade {
         $script:etcherWorkerAttempt = [pscustomobject]@{ ExitCode = $worker.ExitCode; Output = $worker.Output }
         return $script:etcherWorkerAttempt
     }
-    $out = winget upgrade --id $Id --exact --include-unknown --silent --disable-interactivity `
-        --accept-source-agreements --accept-package-agreements @Extra 2>&1 | Out-String
-    [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $out }
+    if ($script:selfUpdating.ContainsKey($Id)) { return Invoke-SelfUpdate -Id $Id }
+    $restart = Stop-AppForUpgrade -Id $Id
+    try {
+        $out = winget upgrade --id $Id --exact --include-unknown --silent --disable-interactivity `
+            --accept-source-agreements --accept-package-agreements @Extra 2>&1 | Out-String
+        $code = $LASTEXITCODE
+    } finally {
+        if ($restart -and $restart.Path -and (Test-Path -LiteralPath $restart.Path)) {
+            Start-Process -FilePath $restart.Path -ArgumentList $restart.Arguments -ErrorAction SilentlyContinue
+        }
+    }
+    [pscustomobject]@{ ExitCode = $code; Output = $out }
 }
 
 $reportDir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
 New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
 $retryPath = Join-Path $reportDir 'winget-failed.json'
+$manualPath = Join-Path $reportDir 'manual-updates-winget.json'
+Remove-Item -LiteralPath $manualPath -ErrorAction SilentlyContinue
+# id -> why winget can't update it here, and what to do instead.
+$manual = [ordered]@{}
+function Add-ManualUpdate {
+    param([string]$Id, [string]$Reason, [string]$Fix)
+    $manual[$Id] = [pscustomobject]@{
+        Source = 'winget'; Id = $Id; Name = $before[$Id].Name
+        Current = $before[$Id].Current; Available = $before[$Id].Available
+        Reason = $Reason; Fix = $Fix
+    }
+    Write-Host "[winget]   $Id : needs a manual update ($Reason) - listed at the end of the run."
+}
 $retryIds = @()
 if ($RetryFailed) {
     if (-not (Test-Path -LiteralPath $retryPath)) { Write-Host 'No previous failed-app report.'; exit 2 }
@@ -289,7 +410,9 @@ function Write-StepOutput {
 }
 # `--all` would still reinstall anything the inventory filtered out, so any
 # exclusion switches to per-package upgrades of exactly what is listed.
-if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher')) {
+# Apps that must be closed first, or that update themselves, need the same.
+$special = @($before.Keys | Where-Object { $script:closeBeforeUpgrade.ContainsKey($_) -or $script:selfUpdating.ContainsKey($_) })
+if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $special.Count -gt 0) {
     $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' })
     for ($i = 0; $i -lt $ids.Count; $i++) {
         $id = $ids[$i]
@@ -327,9 +450,13 @@ if ($stuck.Count -eq 0) {
 }
 
 # Ask winget package-by-package so we can print the REASON, not just the name.
-Write-Host "[winget] $($stuck.Count) package(s) did not upgrade:"
+Write-Host "[winget] $($stuck.Count) package(s) did not upgrade yet; checking each one:"
 $notApplicable = @()
 foreach ($id in $stuck) {
+    if ($script:selfUpdating.ContainsKey($id)) {
+        Add-ManualUpdate -Id $id -Reason 'updates itself, not through winget' -Fix $script:selfUpdating[$id]
+        continue
+    }
     $attempt = Invoke-WingetUpgrade -Id $id
     $res = $attempt.Output
     $code = $attempt.ExitCode
@@ -404,19 +531,29 @@ foreach ($id in $stuck) {
         $scope = Get-InstallScope -Id $id
         $move = "$($before[$id].Current) -> $($before[$id].Available)"
         if ($scope -eq 'user') {
-            Write-Host "[winget]   $id ($move): installed per-user, but the manifest's installer does not apply to that. Let the app update itself, or reinstall it machine-wide with: winget install --id $id -e --scope machine"
+            if (Update-UserScopeInno -Id $id) {
+                Write-Host "[winget]   $id ($move): updated with its own per-user installer."
+                continue
+            }
+            Add-ManualUpdate -Id $id -Reason 'installed per-user, winget only offers a machine-wide installer' `
+                -Fix "Update it from inside the app, or reinstall machine-wide: winget install --id $id -e --scope machine"
         } elseif ($scope -eq 'machine') {
-            Write-Host "[winget]   $id ($move): installed machine-wide, but the manifest's installer does not apply to that. Let the app update itself, or reinstall it with: winget install --id $id -e --scope user"
+            Add-ManualUpdate -Id $id -Reason 'installed machine-wide, winget only offers a per-user installer' `
+                -Fix "Update it from inside the app, or reinstall per-user: winget install --id $id -e --scope user"
         } else {
-            Write-Host "[winget]   $id ($move): no applicable installer for how this app is installed here (the app probably self-updates, so winget's tracked version never moves)."
+            Add-ManualUpdate -Id $id -Reason 'no winget installer applies to how it is installed here' `
+                -Fix 'Update it from inside the app (it probably updates itself).'
         }
         $notApplicable += $id
     }
     # 0x8A15008E = APPINSTALLER_CLI_ERROR_UPDATE_INSTALL_TECHNOLOGY_MISMATCH
     # (-1978335090), e.g. draw.io dropped its MSI. The code survives localized
-    # winget output; the message text does not.
+    # winget output; the message text does not. Not automated: the uninstall
+    # can take the app's settings with it (Sunshine keeps its config in the
+    # install folder), so back them up first.
     elseif ($code -eq -1978335090 -or $res -match 'different install technology') {
-        Write-Host "[winget]   $id : blocked - the new version uses a different install technology (e.g. MSI -> EXE). Reinstall once with: winget uninstall --id $id -e; winget install --id $id -e"
+        Add-ManualUpdate -Id $id -Reason 'the new version uses a different installer type' `
+            -Fix "Back up its settings, then reinstall once: winget uninstall --id $id -e; winget install --id $id -e"
     }
     elseif ($code -eq 0) {
         Write-Host "[winget]   $id : installer returned success; checking the installed version below."
@@ -450,10 +587,7 @@ if (-not $NoChocoFallback -and $notApplicable.Count -gt 0 -and (Get-Command choc
         # winget ids are Publisher.Product; choco ids are usually the product
         # in lowercase.
         $guess = ($id -split '\.')[-1].ToLower()
-        if (-not $localChoco.ContainsKey($guess)) {
-            Write-Host "[winget]   $id : not managed by chocolatey either - upgrade it manually or reinstall it."
-            continue
-        }
+        if (-not $localChoco.ContainsKey($guess)) { continue }
         Write-Host "[winget]   $id : also installed via choco - upgrading '$guess' instead..."
         choco upgrade $guess -y --no-progress 2>&1 | Write-Host
         if ($LASTEXITCODE -eq 0) {
@@ -467,11 +601,24 @@ if (-not $NoChocoFallback -and $notApplicable.Count -gt 0 -and (Get-Command choc
 $remaining = Get-PendingUpgrades
 foreach ($key in @($remaining.Keys)) { if (-not $before.ContainsKey($key)) { $remaining.Remove($key) } }
 if ($RetryFailed) { foreach ($key in @($remaining.Keys)) { if ($retryIds -notcontains $key) { $remaining.Remove($key) } } }
-ConvertTo-Json -InputObject @($remaining.Keys) | Set-Content -LiteralPath $retryPath -Encoding UTF8
-if ($remaining.Count -gt 0) {
-    Write-Host "[result] WinGet: $($before.Count - $remaining.Count) updated; $($remaining.Count) still pending. Successful updates were kept."
-    Write-Host "[error] winget still has $($remaining.Count) pending package(s): $($remaining.Keys -join ', ')"
+# Apps winget can't update here are reported, not failed, and are kept out of
+# the retry list: retrying them changes nothing.
+$manualLeft = @($remaining.Keys | Where-Object { $manual.Contains($_) })
+$failedLeft = @($remaining.Keys | Where-Object { -not $manual.Contains($_) })
+ConvertTo-Json -InputObject @($failedLeft) | Set-Content -LiteralPath $retryPath -Encoding UTF8
+if ($manualLeft.Count -gt 0) {
+    ConvertTo-Json -InputObject @($manualLeft | ForEach-Object { $manual[$_] }) -Depth 3 |
+        Set-Content -LiteralPath $manualPath -Encoding UTF8
+}
+$updatedCount = $before.Count - $remaining.Count
+if ($failedLeft.Count -gt 0) {
+    Write-Host "[result] WinGet: $updatedCount updated; $($failedLeft.Count) failed; $($manualLeft.Count) need a manual update. Successful updates were kept."
+    Write-Host "[error] winget could not update $($failedLeft.Count) package(s): $($failedLeft -join ', ')"
     exit 1
+}
+if ($manualLeft.Count -gt 0) {
+    Write-Host "[result] WinGet: $updatedCount updated; $($manualLeft.Count) need a manual update (listed at the end of the run)."
+    exit 3
 }
 Write-Host '[winget] All pending packages recovered on retry.'
 Write-Host "[result] WinGet: $($before.Count) updated; 0 pending after retries."
