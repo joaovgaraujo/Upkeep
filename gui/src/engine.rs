@@ -40,6 +40,7 @@ const EXIT_DRAIN_GRACE: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Category {
     WindowsUpdate,
+    FeatureUpdate,
     Store,
     Apps,
     Steam,
@@ -60,6 +61,7 @@ pub struct SummaryData {
     pub winget: Option<String>,
     pub topgrade: Option<String>,
     pub windows_update: Option<String>,
+    pub feature_update: Option<String>,
     pub store: Option<String>,
     pub steam: Option<String>,
     pub jdownloader: Option<String>,
@@ -77,6 +79,7 @@ impl SummaryData {
         self.winget.is_none()
             && self.topgrade.is_none()
             && self.windows_update.is_none()
+            && self.feature_update.is_none()
             && self.store.is_none()
             && self.steam.is_none()
             && self.jdownloader.is_none()
@@ -92,6 +95,7 @@ pub struct SkipFlags {
     pub selected_only: bool,
     pub skip_other_apps: bool,
     pub skip_winupdate: bool,
+    pub skip_feature_update: bool,
     pub skip_store: bool,
     pub skip_apps: bool,
     pub skip_steam: bool,
@@ -138,7 +142,9 @@ fn strip_ansi(line: &str) -> String {
 /// extended with a distinct Steam category per the dashboard's sidebar.
 fn category_from_tag(line: &str) -> Option<Category> {
     let lower = line.to_lowercase();
-    if lower.contains("[winupdate]") {
+    if lower.contains("[featureupdate]") {
+        Some(Category::FeatureUpdate)
+    } else if lower.contains("[winupdate]") {
         Some(Category::WindowsUpdate)
     } else if lower.contains("[store]") {
         Some(Category::Store)
@@ -185,6 +191,7 @@ fn parse_summary(text: &str) -> SummaryData {
                 "winget" => data.winget = Some(value),
                 "topgrade" => data.topgrade = Some(value),
                 "windows update" => data.windows_update = Some(value),
+                "feature update" => data.feature_update = Some(value),
                 "ea app" => data.ea_app = Some(value),
                 "duration" => data.duration = Some(value),
                 "store" => data.store = Some(value),
@@ -248,6 +255,7 @@ pub fn spawn_engine(
             ("UPKEEP_SELECTED_ONLY", skip.selected_only),
             ("DASHBOARD_SKIP_OTHER_APPS", skip.skip_other_apps),
             ("DASHBOARD_SKIP_WINUPDATE", skip.skip_winupdate),
+            ("DASHBOARD_SKIP_FEATUREUPDATE", skip.skip_feature_update),
             ("DASHBOARD_SKIP_STORE", skip.skip_store),
             ("DASHBOARD_SKIP_APPS", skip.skip_apps),
             ("DASHBOARD_SKIP_STEAM", skip.skip_steam),
@@ -525,6 +533,7 @@ mod tests {
   winget          : ok
   topgrade        : ok
   Windows Update  : skipped
+  Feature update  : ok - restart required
   Store           : ok
   Steam games     : ok
   JDownloader     : skipped
@@ -537,6 +546,10 @@ mod tests {
         assert_eq!(data.winget.as_deref(), Some("ok"));
         assert_eq!(data.topgrade.as_deref(), Some("ok"));
         assert_eq!(data.windows_update.as_deref(), Some("skipped"));
+        assert_eq!(
+            data.feature_update.as_deref(),
+            Some("ok - restart required")
+        );
         assert_eq!(data.store.as_deref(), Some("ok"));
         assert_eq!(data.steam.as_deref(), Some("ok"));
         assert_eq!(data.jdownloader.as_deref(), Some("skipped"));
@@ -587,6 +600,7 @@ mod tests {
             "  winget          : ok",
             "  topgrade        : ok",
             "  Windows Update  : skipped",
+            "  Feature update  : skipped",
             "  Store           : ok",
             "  Steam games     : ok",
             "  JDownloader     : skipped",
@@ -650,6 +664,10 @@ mod tests {
         assert_eq!(
             category_from_tag("[winupdate] doing stuff"),
             Some(Category::WindowsUpdate)
+        );
+        assert_eq!(
+            category_from_tag("[featureupdate] doing stuff"),
+            Some(Category::FeatureUpdate)
         );
         assert_eq!(
             category_from_tag("[store] doing stuff"),

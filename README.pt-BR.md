@@ -43,6 +43,25 @@ vale entender:
   podem atualizar apps desmarcados no WinGet. A confirmação tem uma única lista
   rolável e botões sempre visíveis.
 
+- **A atualização para 26H2 faz parte de uma execução completa (1.8.0).** O
+  Windows 11 26H2 vem como pacote de habilitação, então a etapa remove
+  qualquer adiamento de atualização de recursos (aquele que o ajuste
+  "somente segurança" do WinUtil deixa para trás, salvo para poder ser
+  restaurado), instala a atualização cumulativa necessária e aplica a
+  KB5121794 - pelo Windows Update quando a distribuição gradual já chegou
+  nesta máquina, e pela CDN da Microsoft quando ainda não chegou. Só instala
+  pacotes com assinatura válida da Microsoft. Exige reiniciar para concluir e
+  nunca reinicia sozinho; o resumo mostra `ok - restart required`. Máquinas
+  já no 26H2, ou em um build incompatível com o pacote, aparecem como
+  `skipped`. Desmarque **Atualização de versão do Windows (26H2)** para não
+  mexer na versão do Windows.
+- **Clientes independentes rodam em paralelo (1.8.0).** Loja, JDownloader e
+  Steam rodam em até três workers ocultos, iniciados *antes* dos
+  gerenciadores de pacotes em vez de depois, e aguardados antes do resumo.
+  Nenhum deles chama winget, choco ou msiexec, então não há disputa entre
+  instaladores, e os downloads de jogos da Steam deixam de somar tempo ao
+  total. Os gerenciadores de pacotes continuam sequenciais entre si.
+
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro
   pacotes já vêm fixados, por dois motivos diferentes:

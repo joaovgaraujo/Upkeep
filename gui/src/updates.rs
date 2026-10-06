@@ -15,13 +15,14 @@ pub struct UpdateItem {
 pub struct UpdatePlan {
     pub items: Vec<UpdateItem>,
     pub windows: bool,
+    pub feature: bool,
     pub store: bool,
     pub steam: bool,
     pub other_apps: bool,
     pub loading: bool,
     pub error: Option<String>,
     pub only_ids: Option<Vec<String>>,
-    pub review_categories: Option<[bool; 4]>,
+    pub review_categories: Option<[bool; 5]>,
 }
 
 impl UpdatePlan {
@@ -37,6 +38,7 @@ impl UpdatePlan {
             && self.error.is_none()
             && (self.items.iter().any(|item| item.selected)
                 || self.windows
+                || self.feature
                 || self.store
                 || self.steam
                 || self.other_apps)

@@ -100,6 +100,7 @@ pub struct Strings {
     pub update_title: &'static str,
     pub update_subtitle: &'static str,
     pub cat_windows_update_desc: &'static str,
+    pub cat_feature_update_desc: &'static str,
     pub cat_store_desc: &'static str,
     pub cat_apps_desc: &'static str,
     pub cat_steam_desc: &'static str,
@@ -191,6 +192,8 @@ pub struct Strings {
     // -- Left panel -----------------------------------------------------
     pub categories_header: &'static str,
     pub cat_windows_update: &'static str,
+    pub cat_feature_update: &'static str,
+    pub cat_feature_update_warn: &'static str,
     pub cat_store: &'static str,
     pub cat_apps: &'static str,
     pub cat_steam: &'static str,
@@ -347,6 +350,7 @@ pub struct Strings {
     // -- Toast ------------------------------------------------------------
     pub toast_title_ok: &'static str,
     pub toast_title_issues: &'static str,
+    pub toast_cat_feature_update: &'static str,
     pub toast_cat_store: &'static str,
     pub toast_cat_apps: &'static str,
     pub toast_cat_steam: &'static str,
@@ -372,6 +376,7 @@ pub static EN: Strings = Strings {
     update_title: "Keep your PC up to date",
     update_subtitle: "Pick what to update and press the big green button. Everything runs by itself; you can minimize this window and you'll get a notification when it's done.",
     cat_windows_update_desc: "Security patches and fixes from Microsoft",
+    cat_feature_update_desc: "Moves Windows up to version 26H2 when this PC is eligible. 26H2 ships as a small enablement package, so it is a restart rather than a reinstall.",
     cat_store_desc: "Apps installed from the Microsoft Store",
     cat_apps_desc: "Updates all your installed programs at once. winget, chocolatey and topgrade are 'package managers': helpers that fetch each program's update straight from its maker.",
     cat_steam_desc: "Checks your installed games and downloads their updates (Steam library for now)",
@@ -458,6 +463,8 @@ pub static EN: Strings = Strings {
 
     categories_header: "Categories",
     cat_windows_update: "Windows Update",
+    cat_feature_update: "Windows version upgrade (26H2)",
+    cat_feature_update_warn: "Upgrades this PC to Windows 11 26H2 and needs a restart to finish. Nothing restarts on its own.",
     cat_store: "Microsoft Store",
     cat_apps: "Programs (winget \u{b7} choco \u{b7} topgrade)",
     cat_steam: "Games (Steam)",
@@ -603,6 +610,7 @@ pub static EN: Strings = Strings {
 
     toast_title_ok: "Upkeep finished successfully",
     toast_title_issues: "Upkeep finished with issues",
+    toast_cat_feature_update: "26H2",
     toast_cat_store: "Store",
     toast_cat_apps: "Apps",
     toast_cat_steam: "Steam",
@@ -627,6 +635,7 @@ pub static PT_BR: Strings = Strings {
     update_title: "Mantenha seu PC em dia",
     update_subtitle: "Escolha o que atualizar e aperte o bot\u{e3}o verde. Tudo roda sozinho; voc\u{ea} pode minimizar esta janela e receber\u{e1} uma notifica\u{e7}\u{e3}o ao terminar.",
     cat_windows_update_desc: "Corre\u{e7}\u{f5}es e patches de seguran\u{e7}a da Microsoft",
+    cat_feature_update_desc: "Atualiza o Windows para a vers\u{e3}o 26H2 quando este PC for eleg\u{ed}vel. O 26H2 vem como um pacote de habilita\u{e7}\u{e3}o pequeno, ent\u{e3}o basta reiniciar, sem reinstalar.",
     cat_store_desc: "Aplicativos instalados pela Loja Microsoft",
     cat_apps_desc: "Atualiza todos os seus programas de uma vez. winget, chocolatey e topgrade s\u{e3}o 'gerenciadores de pacotes': assistentes que baixam a atualiza\u{e7}\u{e3}o de cada programa direto do fabricante.",
     cat_steam_desc: "Procura atualiza\u{e7}\u{f5}es dos seus jogos instalados e as baixa (por enquanto, a biblioteca Steam)",
@@ -713,6 +722,8 @@ pub static PT_BR: Strings = Strings {
 
     categories_header: "Categorias",
     cat_windows_update: "Windows Update",
+    cat_feature_update: "Atualiza\u{e7}\u{e3}o de vers\u{e3}o do Windows (26H2)",
+    cat_feature_update_warn: "Atualiza este PC para o Windows 11 26H2 e exige reiniciar para concluir. Nada reinicia sozinho.",
     cat_store: "Loja Microsoft",
     cat_apps: "Programas (winget \u{b7} choco \u{b7} topgrade)",
     cat_steam: "Jogos (Steam)",
@@ -862,6 +873,7 @@ pub static PT_BR: Strings = Strings {
 
     toast_title_ok: "Upkeep conclu\u{ed}do com sucesso",
     toast_title_issues: "Upkeep conclu\u{ed}do com problemas",
+    toast_cat_feature_update: "26H2",
     toast_cat_store: "Loja",
     toast_cat_apps: "Aplicativos",
     toast_cat_steam: "Steam",
