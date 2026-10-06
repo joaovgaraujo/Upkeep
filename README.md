@@ -75,6 +75,20 @@ needs it. That has consequences worth understanding:
   servicing still runs on its own.
 - **Failed steps now report failure.** Topgrade errors and unresolved winget
   upgrades appear as errors in the summary and produce a nonzero engine exit.
+- **Apps winget cannot update here are listed, not failed (1.8.1).** A
+  per-user install whose manifest is machine-only, an installer that changed
+  type (Sunshine, NSIS to WiX), or an app that updates itself is listed before
+  the summary under "Needs a manual update", with the reason and the command
+  to fix it. The winget row then reads `ok - some apps need a manual update`.
+  Upkeep also fixes the common cases itself: it closes Epic before its MSI
+  runs, updates per-user Inno installs such as Zed with their own installer,
+  leaves Edge to EdgeUpdate, and holds back Git for Windows for the run while
+  Git Bash or anything else from its folder is running.
+- **Claude Code and Codex CLI (1.8.1).** Updated through whichever channel
+  installed them: npm globals with `npm install -g`, Claude Code's native
+  installer and the Codex standalone installer with their own `update`
+  command. winget, Chocolatey, Scoop and Store installs are covered by those
+  steps.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different
