@@ -2,7 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1" $case
@@ -36,6 +36,7 @@ function winget {
         if ($args[0] -eq 'install' -and $args -contains '--force') { $global:normalUpdated = $true; 'Successfully installed'; return }
         if ($args -contains '--id') { $global:LASTEXITCODE = -1978335212; 'No installed package found matching input criteria.'; return }
     }
+    if ($args -contains '--id' -and 'SCENARIO' -eq 'tech-mismatch') { $global:LASTEXITCODE = -1978335090; 'The install technology of the newer version specified is different from the current version installed.'; return }
     if ($args -contains '--id' -and 'SCENARIO' -like 'nonadmin*') { $global:LASTEXITCODE = -1978335146; 'localized refusal'; return }
     if ($args -contains '--id') { $global:LASTEXITCODE = 1; 'fixture installer failed'; return }
     $global:scan++
@@ -64,6 +65,7 @@ function winget {
         '{0,-20}{1,-35}{2,-15}{3,-15}Fonte' -f 'Nome','Id','Versao','Disponivel'
     } else { '{0,-20}{1,-35}{2,-15}{3,-15}Source' -f 'Name','Id','Version','Available' }
     '-' * 100
+    if ('SCENARIO' -eq 'edge') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Microsoft Edge','Microsoft.Edge','154.0.1','154.0.2'; ''; return }
     '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Fixture','Fixture.App','1','2'
     if ('SCENARIO' -in @('retry','selected','ignored','empty-selection','inventory')) { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Other','Fixture.Other','1','2' }
     ''
@@ -88,7 +90,12 @@ exit $LASTEXITCODE
 '@
         Set-Content "$case\wrapper.ps1" $wrapper.Replace('SCENARIO', $Scenario)
         & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$case\wrapper.ps1" *> "$case\output.txt"
-        [pscustomobject]@{ Code=$LASTEXITCODE; Output=(Get-Content "$case\output.txt" -Raw); Calls=(Get-Content "$case\calls.txt" -Raw) }
+        $code = $LASTEXITCODE
+        $manualFile = "$case\Upkeep\Reports\manual-updates-winget.json"
+        $failedFile = "$case\Upkeep\Reports\winget-failed.json"
+        [pscustomobject]@{ Code=$code; Output=(Get-Content "$case\output.txt" -Raw); Calls=(Get-Content "$case\calls.txt" -Raw)
+            Manual=$(if (Test-Path $manualFile) { @(Get-Content $manualFile -Raw | ConvertFrom-Json) } else { @() })
+            Failed=$(if (Test-Path $failedFile) { @(Get-Content $failedFile -Raw | ConvertFrom-Json) } else { @() }) }
     }
 }
 Describe 'Winget results with fake inventory and installers' {
@@ -101,7 +108,7 @@ Describe 'Winget results with fake inventory and installers' {
     It 'reports unresolved upgrades after the individual retry' {
         $run = Invoke-FakeWinget pending
         $run.Code | Should -Be 1
-        $run.Output | Should -Match 'still has 1 pending package'
+        $run.Output | Should -Match 'could not update 1 package'
     }
     It 'returns success when a final inventory confirms recovery' {
         (Invoke-FakeWinget recovered).Code | Should -Be 0
@@ -217,5 +224,55 @@ Describe 'Installer prohibits elevation recovery' {
         $r.Output | Should -Match 'TimedOut.*may still be running'
         $r.Calls | Should -Not -Match '--force'
         ([regex]::Matches($r.Calls,'NORMAL_USER_RETRY')).Count | Should -Be 1
+    }
+}
+
+Describe 'Apps winget cannot update here are reported, not failed' {
+    It 'lists an installer-type change for a manual update and exits 3' {
+        $r = Invoke-FakeWinget tech-mismatch
+        $r.Code | Should -Be 3
+        $r.Output | Should -Not -Match '\[error\]'
+        $r.Manual.Count | Should -Be 1
+        $r.Manual[0].Id | Should -Be 'Fixture.App'
+        $r.Manual[0].Fix | Should -Match 'winget uninstall --id Fixture.App'
+        @($r.Failed | Where-Object { $_ }).Count | Should -Be 0
+    }
+    It 'never runs winget for Edge and never suggests uninstalling it' {
+        $r = Invoke-FakeWinget edge
+        $r.Code | Should -Be 3
+        $r.Calls | Should -Not -Match 'upgrade --id Microsoft.Edge|--all'
+        $r.Manual[0].Fix | Should -Match 'edge://settings/help'
+        $r.Output | Should -Not -Match 'winget uninstall --id Microsoft.Edge'
+    }
+    It 'keeps genuine installer failures as errors' {
+        $r = Invoke-FakeWinget pending
+        $r.Code | Should -Be 1
+        $r.Manual.Count | Should -Be 0
+        @($r.Failed) | Should -Contain 'Fixture.App'
+    }
+}
+
+Describe 'Closing an app before its installer runs' {
+    BeforeAll {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile("$repoRoot/steps/Update-WingetApps.ps1", [ref]$null, [ref]$null)
+        $fn = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Stop-AppForUpgrade' }, $true)
+        . ([scriptblock]::Create($fn.Extent.Text))
+        $script:closeBeforeUpgrade = @{ 'EpicGames.EpicGamesLauncher' = @{ Processes = @('EpicGamesLauncher', 'EpicWebHelper'); Main = 'EpicGamesLauncher'; Arguments = '-silent' } }
+    }
+    It 'closes a running Epic launcher and returns how to start it again' {
+        Mock Get-Process { @([pscustomobject]@{ ProcessName = 'EpicGamesLauncher'; Path = 'C:\Epic\EpicGamesLauncher.exe' }) }
+        Mock Stop-Process { }
+        Mock Start-Sleep { }
+        $r = Stop-AppForUpgrade -Id 'EpicGames.EpicGamesLauncher'
+        $r.Path | Should -Be 'C:\Epic\EpicGamesLauncher.exe'
+        $r.Arguments | Should -Be '-silent'
+        Should -Invoke Stop-Process -Times 1 -Exactly
+    }
+    It 'does nothing for other apps or when the app is not running' {
+        Mock Get-Process { @() }
+        Mock Stop-Process { }
+        Stop-AppForUpgrade -Id 'EpicGames.EpicGamesLauncher' | Should -BeNullOrEmpty
+        Stop-AppForUpgrade -Id 'Fixture.App' | Should -BeNullOrEmpty
+        Should -Invoke Stop-Process -Times 0 -Exactly
     }
 }

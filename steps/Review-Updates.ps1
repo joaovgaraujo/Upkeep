@@ -12,7 +12,10 @@ if ($Mode -eq 'Preview') {
 } elseif ($Mode -eq 'RetryUpdates') {
     & (Join-Path $PSScriptRoot 'Set-UpdateSafety.ps1')
     & (Join-Path $PSScriptRoot 'Update-WingetApps.ps1') -RetryFailed
-    exit $LASTEXITCODE
+    $code = $LASTEXITCODE
+    & (Join-Path $PSScriptRoot 'Show-ManualUpdates.ps1') -Source winget
+    if ($code -eq 3) { $code = 0 }
+    exit $code
 } else {
     $dir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
     $report = Get-ChildItem -LiteralPath $dir -Filter 'apps-*.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
