@@ -50,14 +50,29 @@ needs it. That has consequences worth understanding:
   winget and an `ea-app` pin in Chocolatey before updating applications. It
   also stops automatically launching or reinstalling EA. If either guard
   fails, the run stops. Update EA manually when you can tolerate a restart.
+- **The 26H2 upgrade is part of a full run (1.8.0).** Windows 11 26H2 ships as
+  an enablement package, so the step clears any feature-update deferral (the
+  one WinUtil's "security updates only" tweak leaves behind, saved so it can be
+  restored), installs the prerequisite cumulative update, then applies
+  KB5121794 - taking it from Windows Update when the rollout has reached the
+  machine, and from Microsoft's delivery CDN when it has not. Only packages
+  validly signed by Microsoft are installed. It needs a restart to finish and
+  never performs one itself; the summary says `ok - restart required`. Machines
+  already on 26H2, or on a build the enablement package does not apply to,
+  report `skipped`. Untick **Windows version upgrade (26H2)** to leave the
+  Windows version alone.
 - **Windows Update has one owner.** Topgrade's `system` step is disabled;
   the explicit Windows Update step uses `-IgnoreReboot`, and Topgrade's
   `updates_auto_reboot` is explicitly `"no"`. These controls do not override
   independent Windows restart schedules or every third-party installer.
-- **Independent clients run together.** Store, JDownloader and Steam run in
-  up to three hidden workers after package managers and Windows servicing
-  finish. Each worker has a timeout; results and output are retained in the
-  run log. Package managers stay sequential to avoid installer contention.
+- **Independent clients run alongside everything else (1.8.0).** Store,
+  JDownloader and Steam run in up to three hidden workers, started *before*
+  the package managers instead of after them, and joined before the summary is
+  printed. None of them calls winget, choco or msiexec, so there is no
+  installer contention, and Steam's game downloads stop adding their time to
+  the total. Each worker has a timeout; results and output are retained in the
+  run log. Package managers stay sequential among themselves, and Windows
+  servicing still runs on its own.
 - **Failed steps now report failure.** Topgrade errors and unresolved winget
   upgrades appear as errors in the summary and produce a nonzero engine exit.
 

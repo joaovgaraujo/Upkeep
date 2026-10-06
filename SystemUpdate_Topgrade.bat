@@ -259,6 +259,22 @@ rem line - the dashboard colours those amber - rather than dropping it.
 if not "!errorLevel!"=="0" echo [warn] Some game clients could not be started - see the [launch] lines above.
 )
 
+rem -- Independent clients: started HERE, in parallel with everything below --
+rem    Store, JDownloader and Steam touch none of the package managers: the
+rem    Store step uses the MDM scan and AppX, JDownloader runs its own Java
+rem    updater, Steam patches its own manifests. Nothing in that lane calls
+rem    winget, choco or msiexec, so there is no installer contention with the
+rem    serial lane below - and Steam's game downloads are usually the longest
+rem    part of a run. Waiting for them AFTER the package managers (as this
+rem    used to) simply added their time to the total.
+rem    `start /b` keeps the worker a child of THIS cmd, so it stays inside the
+rem    engine's process tree and the dashboard's Stop still kills it. The lane
+rem    is joined further down, before the summary is printed.
+set "CLIENT_RESULTS=%TGDIR%\client-results.txt"
+set "CLIENT_PIDFILE=%TGDIR%\client-lane.pid"
+del "%CLIENT_RESULTS%" "%CLIENT_PIDFILE%" 2>nul
+start "" /b powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-ClientUpdates.ps1" -ResultFile "%CLIENT_RESULTS%" -LogFile "%LOGFILE%" -PidFile "%CLIENT_PIDFILE%"
+
 rem -- Winget upgrades (handled here, not topgrade, so we can pass
 rem    --disable-interactivity for maximum unattended behavior). Honors the
 rem    pins set above. --silent asks each installer to run quietly;
@@ -352,14 +368,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-WindowsUp
 if "!errorLevel!"=="2" (set "WU_STATUS=skipped") else if not "!errorLevel!"=="0" set "WU_STATUS=error"
 )
 
-rem -- Independent clients: package installers and servicing have finished.
+rem -- Windows feature update (26H2 enablement package) ---------------------
+rem    Runs AFTER Windows Update on purpose: the enablement package needs a
+rem    floor cumulative update, and it refuses to apply while a restart is
+rem    pending, so the quality updates above have to settle first. It also
+rem    must not race winget/choco installers, which is why it is not one of
+rem    the parallel client workers below.
+rem    Exit codes: 0 ok, 1 error, 2 not applicable, 3 ok but needs a restart.
+set "FU_STATUS=skipped"
+rem    FU_TIMEOUT_MIN must be set OUTSIDE the block - see the topgrade note above.
+set "FU_TIMEOUT_MIN=90"
+if not "%DASHBOARD_SKIP_FEATUREUPDATE%"=="1" (
+echo.
+echo [featureupdate] Checking for a Windows feature update (26H2^)...
+set "FU_STATUS=ok"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-FeatureUpdate.ps1" -LogFile "%LOGFILE%" -TimeoutMin %FU_TIMEOUT_MIN%
+if "!errorLevel!"=="2" (set "FU_STATUS=skipped") else if "!errorLevel!"=="3" (set "FU_STATUS=ok - restart required") else if not "!errorLevel!"=="0" set "FU_STATUS=error"
+)
+
+rem -- Join the client lane started before the package managers -------------
+rem    Its results are only read here, so a status line can never be printed
+rem    before the worker that produces it has exited.
 set "EA_STATUS=skipped"
 set "STORE_STATUS=error"
 set "JD_STATUS=error"
 set "STEAM_STATUS=error"
-set "CLIENT_RESULTS=%TGDIR%\client-results.txt"
-del "%CLIENT_RESULTS%" 2>nul
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-ClientUpdates.ps1" -ResultFile "%CLIENT_RESULTS%" -LogFile "%LOGFILE%"
+set "CLIENT_WAIT_SEC=4200"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Wait-BackgroundStep.ps1" -PidFile "%CLIENT_PIDFILE%" -LogFile "%LOGFILE%" -Tag clients -TimeoutSec %CLIENT_WAIT_SEC%
 if exist "%CLIENT_RESULTS%" for /f "usebackq tokens=1,2 delims==" %%A in ("%CLIENT_RESULTS%") do set "%%A=%%B"
 
 rem -- Launch Discord and Battle.net (after updates) ------------------------
@@ -396,6 +431,7 @@ echo ----------------------------------------
 echo   winget          : %WINGET_STATUS%
 echo   topgrade        : %TOPGRADE_STATUS%
 echo   Windows Update  : %WU_STATUS%
+echo   Feature update  : %FU_STATUS%
 echo   Store           : %STORE_STATUS%
 echo   Steam games     : %STEAM_STATUS%
 echo   JDownloader     : %JD_STATUS%
@@ -484,7 +520,7 @@ if "%INTERACTIVE%"=="1" powershell -NoProfile -Command ^
   "try {" ^
   "  [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null;" ^
   "  [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null;" ^
-  "  $body = 'winget: %WINGET_STATUS%  |  topgrade: %TOPGRADE_STATUS%  |  WU: %WU_STATUS%  |  Store: %STORE_STATUS%  |  Steam: %STEAM_STATUS%  |  JD: %JD_STATUS%  |  EA: %EA_STATUS%';" ^
+  "  $body = 'winget: %WINGET_STATUS%  |  topgrade: %TOPGRADE_STATUS%  |  WU: %WU_STATUS%  |  26H2: %FU_STATUS%  |  Store: %STORE_STATUS%  |  Steam: %STEAM_STATUS%  |  JD: %JD_STATUS%  |  EA: %EA_STATUS%';" ^
   "  $xml = [Windows.Data.Xml.Dom.XmlDocument]::new();" ^
   "  $xml.LoadXml(('<toast><visual><binding template=\"ToastGeneric\"><text>{0}</text><text>{1}</text></binding></visual></toast>' -f '%TOAST_TITLE%', $body));" ^
   "  $toast = [Windows.UI.Notifications.ToastNotification]::new($xml);" ^
@@ -504,7 +540,7 @@ if "%INTERACTIVE%"=="1" (
 )
 rem Return failure when a selected step failed; the summary keeps the details.
 set "FINAL_RC=0"
-for %%S in ("%WINGET_STATUS%" "%TOPGRADE_STATUS%" "%WU_STATUS%" "%STORE_STATUS%" "%JD_STATUS%" "%STEAM_STATUS%") do (
+for %%S in ("%WINGET_STATUS%" "%TOPGRADE_STATUS%" "%WU_STATUS%" "%FU_STATUS%" "%STORE_STATUS%" "%JD_STATUS%" "%STEAM_STATUS%") do (
     for /f "tokens=1" %%E in ("%%~S") do if /i "%%E"=="error" set "FINAL_RC=1"
 )
 exit /b %FINAL_RC%

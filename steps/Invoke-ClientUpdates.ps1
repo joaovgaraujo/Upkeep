@@ -1,9 +1,15 @@
-# Run independent client updaters AFTER package managers and Windows servicing.
+﻿# Run independent client updaters. These touch no package manager (Store uses
+# the MDM scan and AppX, JDownloader its own Java updater, Steam its own
+# manifests), so the bat starts this lane BEFORE the package managers and joins
+# it with steps\Wait-BackgroundStep.ps1 before printing the summary - Steam's
+# game downloads then overlap the rest of the run instead of following it.
 # Child processes stay in the engine's process tree, so the GUI Stop kills them.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ResultFile,
     [string]$LogFile,
+    # Written at startup as "<pid> <start time>" for the join step to wait on.
+    [string]$PidFile,
     [ValidateRange(1,3)][int]$MaxParallel = 3,
     [ValidateRange(1,7200)][int]$TimeoutSec = 3900,
     [ValidateRange(1,3600)][int]$HeartbeatSec = 300
@@ -16,6 +22,11 @@ $specs = @(
     @{ Name='STEAM'; Tag='steam'; Script='Update-SteamGames.ps1'; Skip=$env:DASHBOARD_SKIP_STEAM }
 )
 $results = [ordered]@{ STORE='skipped'; JD='skipped'; STEAM='skipped' }
+if ($PidFile) {
+    # The start time disambiguates a PID the OS may have recycled.
+    $self = Get-Process -Id $PID
+    "$PID $($self.StartTime.ToString('o'))" | Set-Content -LiteralPath $PidFile -Encoding ASCII
+}
 $pending = [Collections.Queue]::new()
 foreach ($spec in $specs) { if ($spec.Skip -ne '1') { $pending.Enqueue($spec) } }
 $active = [Collections.ArrayList]::new()

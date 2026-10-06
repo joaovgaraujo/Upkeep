@@ -119,6 +119,7 @@ pub struct DashboardApp {
     rx: Receiver<AppEvent>,
 
     cat_windows_update: bool,
+    cat_feature_update: bool,
     cat_store: bool,
     cat_apps: bool,
     cat_steam: bool,
@@ -289,6 +290,7 @@ impl DashboardApp {
         let mut status = HashMap::new();
         for cat in [
             Category::WindowsUpdate,
+            Category::FeatureUpdate,
             Category::Store,
             Category::Apps,
             Category::Steam,
@@ -326,6 +328,7 @@ impl DashboardApp {
             tx,
             rx,
             cat_windows_update: true,
+            cat_feature_update: true,
             cat_store: true,
             cat_apps: true,
             cat_steam: true,
@@ -642,6 +645,18 @@ impl DashboardApp {
                     );
                 }
             }
+            if self.cat_feature_update {
+                if let Some(v) = &summary.feature_update {
+                    self.status.insert(
+                        Category::FeatureUpdate,
+                        if summary_value_is_benign(v) {
+                            Status::Ok
+                        } else {
+                            Status::Error
+                        },
+                    );
+                }
+            }
             if self.cat_apps {
                 let present: Vec<&String> = [
                     &summary.winget,
@@ -696,6 +711,7 @@ impl DashboardApp {
             || (summary_received && matches!(self.engine_exit, Some(EngineExit::Stopped)));
         let checks = [
             (self.cat_windows_update, Category::WindowsUpdate),
+            (self.cat_feature_update, Category::FeatureUpdate),
             (self.cat_store, Category::Store),
             (self.cat_apps, Category::Apps),
             (self.cat_steam, Category::Steam),
@@ -738,11 +754,16 @@ impl DashboardApp {
         self.toast_sent = true;
 
         let t = self.tr();
-        let cats: [(bool, &str, Category); 4] = [
+        let cats: [(bool, &str, Category); 5] = [
             (
                 self.cat_windows_update,
                 t.cat_windows_update,
                 Category::WindowsUpdate,
+            ),
+            (
+                self.cat_feature_update,
+                t.toast_cat_feature_update,
+                Category::FeatureUpdate,
             ),
             (self.cat_store, t.toast_cat_store, Category::Store),
             (self.cat_apps, t.toast_cat_apps, Category::Apps),
@@ -831,11 +852,23 @@ impl DashboardApp {
         self.show_reboot_confirm = false;
 
         let invoke_engine =
-            self.cat_windows_update || self.cat_store || self.cat_apps || self.cat_steam;
+            self.cat_windows_update
+                || self.cat_feature_update
+                || self.cat_store
+                || self.cat_apps
+                || self.cat_steam;
 
         self.status.insert(
             Category::WindowsUpdate,
             if self.cat_windows_update {
+                Status::Idle
+            } else {
+                Status::Skipped
+            },
+        );
+        self.status.insert(
+            Category::FeatureUpdate,
+            if self.cat_feature_update {
                 Status::Idle
             } else {
                 Status::Skipped
@@ -873,6 +906,7 @@ impl DashboardApp {
         // Build the progress plan from the checked categories.
         self.milestones = build_milestones(
             self.cat_windows_update,
+            self.cat_feature_update,
             self.cat_store,
             self.cat_apps,
             self.cat_steam,
@@ -891,11 +925,13 @@ impl DashboardApp {
                 selected_only: self.selected_update_ids.is_some()
                     && !self.run_other_apps
                     && !self.cat_windows_update
+                    && !self.cat_feature_update
                     && !self.cat_store
                     && !self.cat_steam,
                 skip_other_apps: !self.run_other_apps,
                 selected_ids: self.selected_update_ids.take(),
                 skip_winupdate: !self.cat_windows_update,
+                skip_feature_update: !self.cat_feature_update,
                 skip_store: !self.cat_store,
                 skip_apps: !self.cat_apps,
                 skip_steam: !(self.cat_steam),
@@ -1201,7 +1237,13 @@ struct Milestone {
 /// Weights are rough relative durations observed in real runs; the raw
 /// (untagged) topgrade output is folded into the winget phase's weight.
 /// The independent clients share one final phase because they overlap.
-fn build_milestones(wu: bool, store: bool, apps: bool, steam: bool) -> Vec<Milestone> {
+fn build_milestones(
+    wu: bool,
+    feature: bool,
+    store: bool,
+    apps: bool,
+    steam: bool,
+) -> Vec<Milestone> {
     let mut plan: Vec<(&'static str, f32)> = vec![("setup", 3.0)];
     if apps {
         plan.push(("launch", 1.0));
@@ -1210,7 +1252,18 @@ fn build_milestones(wu: bool, store: bool, apps: bool, steam: bool) -> Vec<Miles
     if wu {
         plan.push(("winupdate", 24.0));
     }
-    if store || apps || steam {
+    // The enablement package itself is seconds; a missing prerequisite
+    // cumulative update is what makes this phase long.
+    if feature {
+        plan.push(("featureupdate", 14.0));
+    }
+    // The client lane (store/jdownloader/steam) now runs in parallel with the
+    // serial lane, so its tags arrive interleaved from the very start. Phase
+    // matching only ever moves forward, so giving it a phase here would let an
+    // early [steam] line jump the bar to the end and freeze it there. It only
+    // gets a phase when it is the whole run.
+    let serial_work = apps || wu || feature;
+    if (store || apps || steam) && !serial_work {
         let weight = if steam {
             16.0
         } else if store {
@@ -2165,6 +2218,7 @@ impl DashboardApp {
         let mut retry = false;
         let offered = *plan.review_categories.get_or_insert([
             plan.windows,
+            plan.feature,
             plan.store,
             plan.steam,
             plan.other_apps,
@@ -2175,7 +2229,7 @@ impl DashboardApp {
             ui.set_width((screen.width() - 48.0).clamp(180.0, 760.0));
             ui.heading(if pt { "Confirmar atualizações" } else { "Confirm updates" });
             let count = plan.selected_ids().len();
-            let categories = [plan.windows, plan.store, plan.steam, plan.other_apps]
+            let categories = [plan.windows, plan.feature, plan.store, plan.steam, plan.other_apps]
                 .into_iter().filter(|selected| *selected).count();
             ui.label(if pt {
                 format!("{count} apps WinGet · {categories} categorias")
@@ -2236,9 +2290,15 @@ impl DashboardApp {
                             ui.label(if pt { "Detectam e atualizam seus próprios itens após a confirmação." } else { "Detect and update their own items after confirmation." });
                         }
                         if offered[0] { ui.checkbox(&mut plan.windows, "Windows Update"); }
-                        if offered[1] { ui.checkbox(&mut plan.store, "Microsoft Store"); }
-                        if offered[2] { ui.checkbox(&mut plan.steam, if pt { "Steam e jogos" } else { "Steam and games" }); }
-                        if offered[3] { ui.checkbox(&mut plan.other_apps, if pt { "Ferramentas de desenvolvimento e outros atualizadores" } else { "Developer tools and other updaters" }); }
+                        if offered[1] {
+                            ui.checkbox(&mut plan.feature, if pt { "Atualiza\u{e7}\u{e3}o de vers\u{e3}o do Windows (26H2)" } else { "Windows version upgrade (26H2)" });
+                            if plan.feature {
+                                ui.colored_label(theme::warn_amber(), if pt { "Atualiza a vers\u{e3}o do Windows e exige reiniciar para concluir." } else { "This upgrades the Windows version and needs a restart to finish." });
+                            }
+                        }
+                        if offered[2] { ui.checkbox(&mut plan.store, "Microsoft Store"); }
+                        if offered[3] { ui.checkbox(&mut plan.steam, if pt { "Steam e jogos" } else { "Steam and games" }); }
+                        if offered[4] { ui.checkbox(&mut plan.other_apps, if pt { "Ferramentas de desenvolvimento e outros atualizadores" } else { "Developer tools and other updaters" }); }
                         if plan.other_apps {
                             ui.label(if pt { "Chocolatey, Topgrade, JDownloader e launchers podem atualizar apps além da lista WinGet, inclusive apps desmarcados acima." } else { "Chocolatey, Topgrade, JDownloader and launchers can update apps outside the WinGet list, including apps unchecked above." });
                         }
@@ -2258,6 +2318,7 @@ impl DashboardApp {
             self.cat_apps =
                 !self.selected_update_ids.as_ref().unwrap().is_empty() || plan.other_apps;
             self.cat_windows_update = plan.windows;
+            self.cat_feature_update = plan.feature;
             self.cat_store = plan.store;
             self.cat_steam = plan.steam;
             self.run_other_apps = plan.other_apps;
@@ -2356,6 +2417,7 @@ impl DashboardApp {
                 let categories = usize::from(self.cat_windows_update)
                     + usize::from(self.cat_store)
                     + usize::from(self.cat_steam)
+                    + usize::from(self.cat_feature_update)
                     + usize::from(self.run_other_apps);
                 if self.updates_checked {
                     ui.add_space(10.0);
@@ -2400,6 +2462,7 @@ impl DashboardApp {
                         self.update_plan = Some(crate::updates::UpdatePlan {
                             items: selected,
                             windows: self.cat_windows_update,
+                            feature: self.cat_feature_update,
                             store: self.cat_store,
                             steam: self.cat_steam,
                             other_apps: self.run_other_apps,
@@ -2452,6 +2515,7 @@ impl DashboardApp {
                         {
                             self.update_plan = Some(crate::updates::UpdatePlan {
                                 windows: self.cat_windows_update,
+                                feature: self.cat_feature_update,
                                 store: self.cat_store,
                                 steam: self.cat_steam,
                                 other_apps: self.run_other_apps,
@@ -2479,6 +2543,10 @@ impl DashboardApp {
                     ui.label(if pt { "Estes serviços detectam e atualizam seus itens ao executar. Desmarque apenas o que quiser excluir." } else { "These services detect and update their items when run. Uncheck anything you want to exclude." });
                     ui.add_space(6.0);
                     ui.checkbox(&mut self.cat_windows_update, "Windows Update");
+                    ui.checkbox(&mut self.cat_feature_update, t.cat_feature_update);
+                    if self.cat_feature_update {
+                        ui.colored_label(theme::warn_amber(), t.cat_feature_update_warn);
+                    }
                     ui.checkbox(&mut self.cat_store, "Microsoft Store");
                     ui.checkbox(&mut self.cat_steam, if pt { "Steam e jogos" } else { "Steam and games" });
                     ui.checkbox(&mut self.run_other_apps, if pt { "Ferramentas de desenvolvimento e outros atualizadores" } else { "Developer tools and other updaters" });
@@ -2684,11 +2752,16 @@ impl DashboardApp {
                             }
                         }
                         ui.add_space(4.0);
-                        let cats: [(bool, &str, Category); 4] = [
+                        let cats: [(bool, &str, Category); 5] = [
                             (
                                 self.cat_windows_update,
                                 t.cat_windows_update,
                                 Category::WindowsUpdate,
+                            ),
+                            (
+                                self.cat_feature_update,
+                                t.toast_cat_feature_update,
+                                Category::FeatureUpdate,
                             ),
                             (self.cat_store, t.toast_cat_store, Category::Store),
                             (self.cat_apps, t.toast_cat_apps, Category::Apps),
@@ -3109,6 +3182,7 @@ impl DashboardApp {
                             ("winget", &summary.winget),
                             ("topgrade", &summary.topgrade),
                             (t.cat_windows_update, &summary.windows_update),
+                            (t.cat_feature_update, &summary.feature_update),
                             (t.summary_row_store, &summary.store),
                             (t.summary_row_steam, &summary.steam),
                             ("JDownloader", &summary.jdownloader),
@@ -5409,14 +5483,15 @@ mod tests {
 
     #[test]
     fn milestones_are_monotonic_and_end_at_100() {
-        for (wu, store, apps, steam) in [
-            (true, true, true, true),
-            (true, false, false, false),
-            (false, true, false, false),
-            (false, false, true, true),
-            (false, false, true, false),
+        for (wu, feature, store, apps, steam) in [
+            (true, true, true, true, true),
+            (true, false, false, false, false),
+            (false, true, false, false, false),
+            (false, false, true, false, false),
+            (false, false, false, true, true),
+            (false, false, false, true, false),
         ] {
-            let plan = build_milestones(wu, store, apps, steam);
+            let plan = build_milestones(wu, feature, store, apps, steam);
             assert!(!plan.is_empty());
             let mut prev_end = 0.0_f32;
             for m in &plan {
@@ -5433,9 +5508,19 @@ mod tests {
 
     #[test]
     fn milestones_skip_unchecked_categories() {
-        let plan = build_milestones(true, false, false, false);
+        let plan = build_milestones(true, false, false, false, false);
         assert!(plan.iter().all(|m| m.tag != "store" && m.tag != "winget"));
         assert!(plan.iter().any(|m| m.tag == "winupdate"));
+        assert!(plan.iter().all(|m| m.tag != "featureupdate"));
+        let plan = build_milestones(false, true, false, false, false);
+        assert!(plan.iter().any(|m| m.tag == "featureupdate"));
+
+        // The client lane overlaps the serial lane, so it must not own a phase
+        // whenever there is serial work to track.
+        let plan = build_milestones(true, false, true, false, true);
+        assert!(plan.iter().all(|m| m.tag != "clients"));
+        let plan = build_milestones(false, false, true, false, true);
+        assert!(plan.iter().any(|m| m.tag == "clients"));
     }
 
     #[test]
