@@ -60,7 +60,12 @@ vale entender:
   gerenciadores de pacotes em vez de depois, e aguardados antes do resumo.
   Nenhum deles chama winget, choco ou msiexec, então não há disputa entre
   instaladores, e os downloads de jogos da Steam deixam de somar tempo ao
-  total. Os gerenciadores de pacotes continuam sequenciais entre si.
+  total. Cada worker tem um tempo limite; resultados e saída ficam no log da
+  execução. Os gerenciadores de pacotes continuam sequenciais entre si, e a
+  manutenção do Windows continua rodando sozinha.
+- **Etapas com falha agora aparecem como falha.** Erros do topgrade e
+  atualizações do winget não resolvidas aparecem como erros no resumo e fazem
+  o motor sair com código diferente de zero.
 - **Apps que o winget não consegue atualizar aparecem listados, não como
   erro (1.8.2).** Uma instalação por usuário cujo manifesto só oferece
   instalação para a máquina, um instalador que mudou de tipo (Sunshine, de
@@ -130,9 +135,13 @@ que falta:
   troca de drivers desmarcada e não aplica o reparo específico desta máquina
   automaticamente. O script de reparo continua disponível separadamente.
 - **WinGet ausente:** tenta registrar o App Installer e usar o módulo oficial
-  de reparo. Prepara Chocolatey independentemente como alternativa.
+  de reparo. Prepara Chocolatey independentemente como alternativa. As falhas
+  ficam registradas por app.
 - **Prévia, repetição de falhas e backups:** veja as
-  [notas da versão 1.5.0](docs/RELEASE-1.5.0.md). Os relatórios ficam em
+  [notas da versão 1.5.0](docs/RELEASE-1.5.0.md).
+  [A 1.5.1 adiciona a continuação opcional após reiniciar](docs/RELEASE-1.5.1.md),
+  incluindo a preparação do WSL antes de instalar o Docker. Os relatórios,
+  incluindo a lista de apps que precisam de atualização manual, ficam em
   `%LOCALAPPDATA%\Upkeep\Reports`, com instruções para cada falha.
 
 ## Opcional: tempos de inicialização
@@ -162,7 +171,9 @@ Requer um toolchain Rust (MSVC) e, para o instalador, o Inno Setup 6.
 ```powershell
 cd gui
 cargo build --release          # gera gui\target\release\Upkeep.exe
-cargo test --release           # 58 testes
+cargo test --release           # testes da interface e do motor
+cd ..
+Invoke-Pester -Path .\tests    # testes das etapas em PowerShell (Pester 5.7.1, Windows PowerShell 5.1)
 
 .\Build-Portable.ps1           # dist\Upkeep-Portable.zip + dist\Upkeep\
 .\Build-Installer.ps1          # dist\Upkeep-Setup.exe
@@ -178,7 +189,8 @@ partir de qualquer lugar.
 | --- | --- |
 | `gui/` | painel em Rust/egui (lib `dashboard_core` + binário `Upkeep`) |
 | `SystemUpdate_Topgrade.bat` | o motor de atualização; roda também sozinho |
-| `steps/` | etapas de Store, Steam, JDownloader, winget e launchers |
+| `steps/` | as etapas do motor: winget, topgrade, Windows Update e a atualização para 26H2, Loja, Steam, JDownloader, CLIs de IA, launchers, a lista de atualizações manuais |
+| `tests/` | testes Pester das etapas e do caminho de PC novo |
 | `Setup-NewPC.ps1` | configuração de PC novo em uma única execução |
 | `Repair-Usb4Driver.ps1` | remove um driver Intel Thunderbolt errado de controladoras USB4 |
 | `Install-Apps.ps1`, `apps.json`, `presets/` | catálogo e instalador de apps |

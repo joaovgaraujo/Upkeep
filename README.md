@@ -143,7 +143,9 @@ half ready, instead of hanging on the first thing that is missing:
 - **Preview, retry and recovery:** see [1.5.0 release notes](docs/RELEASE-1.5.0.md)
   for conservative defaults, failed-only retries, reports and registry rollback.
   [1.5.1 adds opt-in restart continuation](docs/RELEASE-1.5.1.md), including
-  WSL feature preparation before Docker installation.
+  WSL feature preparation before Docker installation. Reports, including the
+  list of apps that need a manual update, are written to
+  `%LOCALAPPDATA%\Upkeep\Reports`.
 
 ## Optional: startup timings
 
@@ -171,6 +173,8 @@ Requires a Rust toolchain (MSVC) and, for the installer, Inno Setup 6.
 cd gui
 cargo build --release          # produces gui\target\release\Upkeep.exe
 cargo test --release           # GUI and engine tests
+cd ..
+Invoke-Pester -Path .\tests    # PowerShell step tests (Pester 5.7.1, Windows PowerShell 5.1)
 
 .\Build-Portable.ps1           # dist\Upkeep-Portable.zip + dist\Upkeep\
 .\Build-Installer.ps1          # dist\Upkeep-Setup.exe
@@ -185,7 +189,8 @@ The exe finds its resources by walking up from its own directory looking for
 | --- | --- |
 | `gui/` | Rust/egui dashboard (`dashboard_core` lib + `Upkeep` bin) |
 | `SystemUpdate_Topgrade.bat` | the update engine; runnable standalone |
-| `steps/` | Store, Steam, JDownloader, winget and launcher steps |
+| `steps/` | the engine's steps: winget, topgrade, Windows Update and the 26H2 upgrade, Store, Steam, JDownloader, AI CLIs, launchers, the manual-update list |
+| `tests/` | Pester tests for the steps and the new-PC path |
 | `Setup-NewPC.ps1` | one-shot new-PC setup |
 | `Repair-Usb4Driver.ps1` | removes a wrong Intel Thunderbolt driver from USB4 controllers |
 | `Install-Apps.ps1`, `apps.json`, `presets/` | app catalog and installer |
