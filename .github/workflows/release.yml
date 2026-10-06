@@ -143,12 +143,20 @@ jobs:
             Set-Content dist\SHA256SUMS.txt
           Get-Content dist\SHA256SUMS.txt
 
+      - name: Pick release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          if (-not (Test-Path "docs/RELEASE-$version.md")) { throw "docs/RELEASE-$version.md is missing" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           generate_release_notes: true
-          body_path: docs/RELEASE-1.7.2.md
+          body_path: docs/RELEASE-${{ steps.notes.outputs.version }}.md
           files: |
             dist/Upkeep-Setup.exe
             dist/Upkeep-Portable.zip
