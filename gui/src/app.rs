@@ -851,12 +851,11 @@ impl DashboardApp {
         }
         self.show_reboot_confirm = false;
 
-        let invoke_engine =
-            self.cat_windows_update
-                || self.cat_feature_update
-                || self.cat_store
-                || self.cat_apps
-                || self.cat_steam;
+        let invoke_engine = self.cat_windows_update
+            || self.cat_feature_update
+            || self.cat_store
+            || self.cat_apps
+            || self.cat_steam;
 
         self.status.insert(
             Category::WindowsUpdate,
