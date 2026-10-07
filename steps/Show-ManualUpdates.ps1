@@ -4,7 +4,7 @@
     automatically and what to do about each one.
 
 .DESCRIPTION
-    Steps write Reports\manual-updates-<source>.json (winget, choco, ai-cli)
+    Steps write Reports\manual-updates-<source>.json (winget, choco, ai-cli, feature)
     for packages that are not failures of this run but cannot be updated
     unattended here: scope or installer-type mismatches, self-updating apps,
     programs in use. The engine deletes those files when a run starts, so
@@ -13,7 +13,7 @@
 #>
 [CmdletBinding()]
 param(
-    # Limit to these report sources (winget, choco, ai-cli). Runs that only
+    # Limit to these report sources (winget, choco, ai-cli, feature). Runs that only
     # touch winget pass 'winget' so an older run's other lists don't show.
     [string[]]$Source
 )

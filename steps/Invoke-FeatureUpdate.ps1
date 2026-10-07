@@ -29,9 +29,16 @@
     signed by Microsoft - these are servicing payloads applied with SYSTEM
     rights, so a plausible-looking URL is not enough on its own.
 
+    When Windows Update installs nothing that moves the build toward the
+    floor, the prerequisite was not offered to this machine. That used to be
+    reported as "Prerequisite updates are staged ... restart", which no
+    restart could fix (2026-10-06: build .9457, "Found [0] Updates"). It is
+    now listed at the end of the run as a manual update, with the KB to get.
+
 .NOTES
     Exit code: 0 ok, 1 failed or timed out, 2 skipped / not applicable,
-    3 ok but Windows must restart to finish.
+    3 ok but Windows must restart to finish, 4 needs a manual update
+    (listed in Reports\manual-updates-feature.json).
 #>
 [CmdletBinding()]
 param(
@@ -70,6 +77,9 @@ param(
 
     # Report what would happen and change nothing.
     [switch]$DryRun,
+
+    # Where the manual-update list is written. Tests point it at a scratch folder.
+    [string]$ReportDir = (Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'),
 
     # Tests substitute their own bodies for the two long-running pieces.
     [scriptblock]$PrerequisiteJobBody,
@@ -272,6 +282,9 @@ if (-not $PolicyBackupPath) {
     $PolicyBackupPath = Join-Path $logDir "FeatureUpdate_PolicyBackup_$(Get-Date -Format yyyyMMdd_HHmmss).json"
 }
 
+$manualPath = Join-Path $ReportDir 'manual-updates-feature.json'
+Remove-Item -LiteralPath $manualPath -ErrorAction SilentlyContinue
+
 $code = 0
 try {
     $arch = "$env:PROCESSOR_ARCHITECTURE".ToUpperInvariant()
@@ -341,14 +354,31 @@ try {
             exit 1
         }
 
+        $ubrBefore = $os.Ubr
         $os = Get-WindowsBuildInfo
         if ($os.Build -ge $TargetBuild) {
             Write-FeatureLine "Windows Update went straight to $($os.DisplayVersion)."
             exit 3
         }
+        # Same rule as above: a test must not depend on the real restart flag.
+        $restartPending = if ($underTest) { $false } else { Test-RebootPending }
+        # Nothing staged and the build did not move: Windows Update did not
+        # offer the prerequisite, and a restart would change nothing.
+        if ($os.Ubr -lt $PrerequisiteUbr -and $os.Ubr -eq $ubrBefore -and -not $restartPending) {
+            $fix = "Install $PrerequisiteKB (or any later cumulative update for build $($os.Build)) from the Microsoft Update Catalog, restart, then run Upkeep again."
+            Write-FeatureLine "Windows Update did not offer ${PrerequisiteKB}: the build is still $($os.Build).$($os.Ubr) and nothing is waiting for a restart. $fix"
+            New-Item -ItemType Directory -Path $ReportDir -Force | Out-Null
+            ConvertTo-Json -Depth 3 -InputObject @([pscustomobject]@{
+                Source = 'feature'; Id = $EnablementKB; Name = "Windows 11 $TargetVersion"
+                Current = "$($os.Build).$($os.Ubr)"; Available = $TargetVersion
+                Reason = "needs build $($os.Build).$PrerequisiteUbr ($PrerequisiteKB) first, and Windows Update did not offer it"
+                Fix = $fix
+            }) | Set-Content -LiteralPath $manualPath -Encoding UTF8
+            exit 4
+        }
         # The update is staged but not live until the restart, and its UBR only
         # appears afterwards, so the enablement package has to wait for it.
-        if ($os.Ubr -lt $PrerequisiteUbr -or (Test-RebootPending)) {
+        if ($os.Ubr -lt $PrerequisiteUbr -or $restartPending) {
             Write-FeatureLine "Prerequisite updates are staged (build is now $($os.Build).$($os.Ubr)). Restart Windows, then run the upgrade again to apply $EnablementKB."
             exit 3
         }

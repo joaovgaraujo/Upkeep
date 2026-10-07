@@ -2,7 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1" $case
@@ -37,6 +37,8 @@ function winget {
         if ($args -contains '--id') { $global:LASTEXITCODE = -1978335212; 'No installed package found matching input criteria.'; return }
     }
     if ($args -contains '--id' -and 'SCENARIO' -eq 'tech-mismatch') { $global:LASTEXITCODE = -1978335090; 'The install technology of the newer version specified is different from the current version installed.'; return }
+    # App Installer upgrades fine, but winget keeps listing the old version.
+    if ($args -contains '--id' -and 'SCENARIO' -eq 'winget-itself') { 'Successfully installed'; return }
     if ($args -contains '--id' -and 'SCENARIO' -like 'nonadmin*') { $global:LASTEXITCODE = -1978335146; 'localized refusal'; return }
     if ($args -contains '--id') { $global:LASTEXITCODE = 1; 'fixture installer failed'; return }
     $global:scan++
@@ -65,6 +67,7 @@ function winget {
         '{0,-20}{1,-35}{2,-15}{3,-15}Fonte' -f 'Nome','Id','Versao','Disponivel'
     } else { '{0,-20}{1,-35}{2,-15}{3,-15}Source' -f 'Name','Id','Version','Available' }
     '-' * 100
+    if ('SCENARIO' -eq 'winget-itself') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'App Installer','Microsoft.AppInstaller','1.26.509.0','1.29.380'; ''; return }
     if ('SCENARIO' -eq 'edge') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Microsoft Edge','Microsoft.Edge','154.0.1','154.0.2'; ''; return }
     '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Fixture','Fixture.App','1','2'
     if ('SCENARIO' -in @('retry','selected','ignored','empty-selection','inventory')) { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Other','Fixture.Other','1','2' }
@@ -137,6 +140,13 @@ Describe 'Winget results with fake inventory and installers' {
         $r.Code | Should -Be 1
         $r.Calls | Should -Match '--id Fixture.App'
         $r.Calls | Should -Not -Match '--all|--id Fixture.Other'
+    }
+    It 'takes App Installer''s success at its word instead of reinstalling it' {
+        $r = Invoke-FakeWinget winget-itself
+        $r.Code | Should -Be 0
+        $r.Output | Should -Match 'App Installer is winget itself'
+        ([regex]::Matches($r.Calls, '--id Microsoft.AppInstaller')).Count | Should -Be 1
+        $r.Failed.Count | Should -Be 0
     }
 }
 

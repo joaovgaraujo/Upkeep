@@ -223,7 +223,11 @@ echo [setup] Writing topgrade config...
     rem hang. Update ollama models manually when you want to: ollama pull <model>
     rem Store and Windows servicing have their own steps below. Disable
     rem both here to avoid duplicate work and honor the category skip flags.
-    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system"]
+    rem claude_code too: steps\Update-AiClis.ps1 updates Claude Code through
+    rem whichever channel installed it, and topgrade ran "claude update" a
+    rem second time on every run. claude_code_plugins stays on; nothing else
+    rem updates the plugin marketplaces.
+    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system", "claude_code"]
     echo.
     echo [windows]
     echo accept_all_updates = true
@@ -397,7 +401,8 @@ rem    floor cumulative update, and it refuses to apply while a restart is
 rem    pending, so the quality updates above have to settle first. It also
 rem    must not race winget/choco installers, which is why it is not one of
 rem    the parallel client workers below.
-rem    Exit codes: 0 ok, 1 error, 2 not applicable, 3 ok but needs a restart.
+rem    Exit codes: 0 ok, 1 error, 2 not applicable, 3 ok but needs a restart,
+rem    4 needs a manual update (the prerequisite was not offered; listed at the end).
 set "FU_STATUS=skipped"
 rem    FU_TIMEOUT_MIN must be set OUTSIDE the block - see the topgrade note above.
 set "FU_TIMEOUT_MIN=90"
@@ -406,7 +411,7 @@ echo.
 echo [featureupdate] Checking for a Windows feature update (26H2^)...
 set "FU_STATUS=ok"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-FeatureUpdate.ps1" -LogFile "%LOGFILE%" -TimeoutMin %FU_TIMEOUT_MIN%
-if "!errorLevel!"=="2" (set "FU_STATUS=skipped") else if "!errorLevel!"=="3" (set "FU_STATUS=ok - restart required") else if not "!errorLevel!"=="0" set "FU_STATUS=error"
+if "!errorLevel!"=="2" (set "FU_STATUS=skipped") else if "!errorLevel!"=="3" (set "FU_STATUS=ok - restart required") else if "!errorLevel!"=="4" (set "FU_STATUS=ok - needs a manual update") else if not "!errorLevel!"=="0" set "FU_STATUS=error"
 )
 
 rem -- Join the client lane started before the package managers -------------

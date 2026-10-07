@@ -98,6 +98,29 @@ exit `$LASTEXITCODE
         $text | Should -Match '\[error\] fixture module missing'
         $text | Should -Match '\(error\)'
     }
+    It 'retries a failed pass once and reports ok when the retry succeeds' {
+        $log = Join-Path $TestDrive 'wu-retry.log'
+        $marker = Join-Path $TestDrive 'wu-first-pass-ran'
+        $runner = Join-Path $TestDrive 'wu-retry.ps1'
+        # The marker file is how the second pass knows it is the second one:
+        # each pass is a fresh job process.
+        Set-Content $runner -Value @"
+& '$repoRoot\steps\Invoke-WindowsUpdate.ps1' -LogFile '$log' -JobBody {
+    if (-not (Test-Path '$marker')) { New-Item '$marker' | Out-Null; throw 'Exception from HRESULT: 0x80248007' }
+    'Installed KB0000002'
+}
+exit `$LASTEXITCODE
+"@
+        $proc = Start-Step $runner @()
+        $proc.WaitForExit(30000) | Should -BeTrue
+        $proc.ExitCode | Should -Be 0
+        $text = Get-Content $log -Raw
+        $text | Should -Match '\[warn\] Exception from HRESULT: 0x80248007'
+        $text | Should -Match 'retry 1 of 1'
+        $text | Should -Match 'Installed KB0000002'
+        $text | Should -Not -Match '\[error\]'
+        $text | Should -Match '\[winupdate\] finished in .* \(ok\)'
+    }
 }
 
 Describe 'Client worker output streams while the worker runs' {
