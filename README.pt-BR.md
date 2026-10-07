@@ -80,7 +80,14 @@ vale entender:
   instalou: pacotes globais do npm com `npm install -g`, o instalador nativo
   do Claude Code e o instalador avulso do Codex com o próprio comando
   `update`. Instalações por winget, Chocolatey, Scoop e Loja ficam com essas
-  etapas.
+  etapas. A etapa de Claude Code do próprio topgrade fica desligada, para
+  não atualizar duas vezes (1.8.3).
+- **Menos erros falsos (1.8.3).** Uma passada do Windows Update que falha é
+  repetida uma vez, e a linha só mostra `error` se a repetição também
+  falhar. Quando o Windows Update não oferece a atualização cumulativa que
+  o 26H2 exige antes, a etapa do 26H2 a lista em "Needs a manual update" em
+  vez de pedir uma reinicialização que não resolveria. Uma atualização do
+  App Installer que informa sucesso não é instalada uma segunda vez.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

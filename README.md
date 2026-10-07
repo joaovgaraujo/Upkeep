@@ -88,7 +88,14 @@ needs it. That has consequences worth understanding:
   installed them: npm globals with `npm install -g`, Claude Code's native
   installer and the Codex standalone installer with their own `update`
   command. winget, Chocolatey, Scoop and Store installs are covered by those
-  steps.
+  steps. topgrade's own Claude Code step is turned off so it is not updated
+  twice (1.8.3).
+- **Fewer false errors (1.8.3).** A Windows Update pass that fails is
+  retried once, and the row only reads `error` if the retry fails too. When
+  Windows Update does not offer the cumulative update 26H2 needs first, the
+  26H2 step lists it under "Needs a manual update" instead of asking for a
+  restart that would not help. An App Installer upgrade that reports success
+  is not installed a second time.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different
