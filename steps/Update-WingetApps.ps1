@@ -213,6 +213,10 @@ $script:selfUpdating = @{
 }
 $script:selfUpdateAttempt = @{}
 
+# See the note after the upgrade pass.
+$script:wingetItself = 'Microsoft.AppInstaller'
+$wingetReplaced = $false
+
 if ($InventoryOnly) {
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
     try { ConvertTo-Json -InputObject @((Get-PendingUpgrades).Values | Sort-Object Name) -Compress }
@@ -412,7 +416,7 @@ function Write-StepOutput {
 # exclusion switches to per-package upgrades of exactly what is listed.
 # Apps that must be closed first, or that update themselves, need the same.
 $special = @($before.Keys | Where-Object { $script:closeBeforeUpgrade.ContainsKey($_) -or $script:selfUpdating.ContainsKey($_) })
-if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $special.Count -gt 0) {
+if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0) {
     $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' })
     for ($i = 0; $i -lt $ids.Count; $i++) {
         $id = $ids[$i]
@@ -422,6 +426,7 @@ if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:vers
         Write-StepOutput $attempt.Output
         Write-StepOutput ("[winget] ({0}/{1}) {2} finished in {3:N0}s (exit {4})." -f ($i + 1), $ids.Count, $id, ((Get-Date) - $started).TotalSeconds, $attempt.ExitCode)
         if ($attempt.ExitCode -ne 0) { $upgradeExit = $attempt.ExitCode }
+        if ($id -eq $script:wingetItself -and $attempt.ExitCode -eq 0) { $wingetReplaced = $true }
     }
 } else {
     winget upgrade --all --include-unknown --silent --disable-interactivity `
@@ -431,6 +436,14 @@ if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:vers
 }
 
 $after = Get-PendingUpgrades
+# App Installer is winget itself. On 2026-10-06 its upgrade returned 0, yet
+# every winget query for the rest of the run still listed the old version, so
+# it was installed a second time and the winget row read "error". Take the
+# installer's success at its word; the next run shows whether it took.
+if ($wingetReplaced -and $after.ContainsKey($script:wingetItself)) {
+    $after.Remove($script:wingetItself)
+    Write-Host "[winget]   $($script:wingetItself) : installer returned success. App Installer is winget itself, so this run's winget can still list the old version; the next run will show whether the update took."
+}
 $upgraded = @($before.Keys | Where-Object { -not $after.ContainsKey($_) })
 $stuck = @($before.Keys | Where-Object { $after.ContainsKey($_) })
 ConvertTo-Json -InputObject $stuck | Set-Content -LiteralPath $retryPath -Encoding UTF8
@@ -600,6 +613,7 @@ if (-not $NoChocoFallback -and $notApplicable.Count -gt 0 -and (Get-Command choc
 
 $remaining = Get-PendingUpgrades
 foreach ($key in @($remaining.Keys)) { if (-not $before.ContainsKey($key)) { $remaining.Remove($key) } }
+if ($wingetReplaced) { $remaining.Remove($script:wingetItself) }
 if ($RetryFailed) { foreach ($key in @($remaining.Keys)) { if ($retryIds -notcontains $key) { $remaining.Remove($key) } } }
 # Apps winget can't update here are reported, not failed, and are kept out of
 # the retry list: retrying them changes nothing.

@@ -29,7 +29,8 @@ BeforeAll {
 
     function Invoke-FeatureStep {
         param([string[]]$Arguments, [int]$TimeoutSec = 60)
-        $proc = Start-Step $featureStep $Arguments
+        # Keep the step away from the real %LOCALAPPDATA%\Upkeep\Reports.
+        $proc = Start-Step $featureStep ($Arguments + @('-ReportDir', "`"$TestDrive\reports`""))
         $proc.WaitForExit($TimeoutSec * 1000) | Out-Null
         $proc
     }
@@ -82,7 +83,7 @@ Describe 'prerequisite progress streams while the job runs' {
         # arguments cannot survive the command line.
         Set-Content $runner -Value @"
 & '$featureStep' -LogFile '$log' -TargetBuild 99999 -SupportedBuilds $script:currentBuild ``
-    -PrerequisiteUbr 99999 -KeepDeferralPolicy -HeartbeatSec 2 ``
+    -PrerequisiteUbr 99999 -KeepDeferralPolicy -ReportDir '$TestDrive\reports' -HeartbeatSec 2 ``
     -PrerequisiteJobBody { 'Downloading KB0000001'; Start-Sleep -Seconds 6; 'Installed KB0000001' }
 exit `$LASTEXITCODE
 "@
@@ -97,7 +98,7 @@ exit `$LASTEXITCODE
         $runner = Join-Path $TestDrive 'feature-fail-runner.ps1'
         Set-Content $runner -Value @"
 & '$featureStep' -LogFile '$log' -TargetBuild 99999 -SupportedBuilds $script:currentBuild ``
-    -PrerequisiteUbr 99999 -KeepDeferralPolicy ``
+    -PrerequisiteUbr 99999 -KeepDeferralPolicy -ReportDir '$TestDrive\reports' ``
     -PrerequisiteJobBody { throw 'fixture module missing' }
 exit `$LASTEXITCODE
 "@
@@ -107,6 +108,27 @@ exit `$LASTEXITCODE
         $text = Get-Content $log -Raw
         $text | Should -Match '\[error\] fixture module missing'
         $text | Should -Match 'did not complete'
+    }
+
+    It 'lists the prerequisite for a manual update when Windows Update offered nothing' {
+        $log = Join-Path $TestDrive 'not-offered.log'
+        $reports = Join-Path $TestDrive 'not-offered-reports'
+        $runner = Join-Path $TestDrive 'feature-not-offered-runner.ps1'
+        Set-Content $runner -Value @"
+& '$featureStep' -LogFile '$log' -TargetBuild 99999 -SupportedBuilds $script:currentBuild ``
+    -PrerequisiteUbr 99999 -PrerequisiteKB KB0000003 -KeepDeferralPolicy -ReportDir '$reports' ``
+    -PrerequisiteJobBody { 'Found [0] Updates in pre search criteria' }
+exit `$LASTEXITCODE
+"@
+        $proc = Start-Step $runner @()
+        $proc.WaitForExit(60000) | Should -BeTrue
+        $proc.ExitCode | Should -Be 4
+        $text = Get-Content $log -Raw
+        $text | Should -Match 'Windows Update did not offer KB0000003'
+        $text | Should -Not -Match 'staged'
+        $report = Get-Content (Join-Path $reports 'manual-updates-feature.json') -Raw | ConvertFrom-Json
+        $report.Source | Should -Be 'feature'
+        $report.Fix | Should -Match 'KB0000003'
     }
 }
 
