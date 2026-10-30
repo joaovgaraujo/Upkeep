@@ -362,8 +362,13 @@ echo.
 echo [topgrade] Running topgrade ^(limit %TOPGRADE_TIMEOUT_MIN% min^)...
 rem Git for Windows' installer aborts (exit 1) while anything from its folder
 rem runs, failing the whole Chocolatey step. Hold it back for this run instead.
+rem It also writes topgrade-extra-args.txt (e.g. "--disable uv" while uv-run
+rem servers hold uv's cache). !TG_EXTRA!, not %TG_EXTRA%: inside this block a
+rem %VAR% would expand before the file is read.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Protect-InUsePackages.ps1" -Action Hold
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-Topgrade.ps1" -ConfigPath "%TGCONF%" -LogFile "%LOGFILE%" -TimeoutMin %TOPGRADE_TIMEOUT_MIN%
+set "TG_EXTRA="
+if exist "%TGDIR%\topgrade-extra-args.txt" set /p TG_EXTRA=<"%TGDIR%\topgrade-extra-args.txt"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-Topgrade.ps1" -ConfigPath "%TGCONF%" -LogFile "%LOGFILE%" -TimeoutMin %TOPGRADE_TIMEOUT_MIN% -ExtraArguments "!TG_EXTRA!"
 )
 
 if not "%DASHBOARD_SKIP_APPS%"=="1" (set "RC=!errorLevel!") else (set "RC=0")

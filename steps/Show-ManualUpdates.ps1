@@ -4,7 +4,7 @@
     automatically and what to do about each one.
 
 .DESCRIPTION
-    Steps write Reports\manual-updates-<source>.json (winget, choco, ai-cli, feature)
+    Steps write Reports\manual-updates-<source>.json (winget, choco, ai-cli, feature, uv, store)
     for packages that are not failures of this run but cannot be updated
     unattended here: scope or installer-type mismatches, self-updating apps,
     programs in use. The engine deletes those files when a run starts, so
@@ -13,7 +13,7 @@
 #>
 [CmdletBinding()]
 param(
-    # Limit to these report sources (winget, choco, ai-cli, feature). Runs that only
+    # Limit to these report sources (winget, choco, ai-cli, feature, uv, store). Runs that only
     # touch winget pass 'winget' so an older run's other lists don't show.
     [string[]]$Source
 )
@@ -22,7 +22,13 @@ $dir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
 $items = @()
 foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter 'manual-updates-*.json' -ErrorAction SilentlyContinue)) {
     if ($Source -and ($f.BaseName -replace '^manual-updates-') -notin $Source) { continue }
-    try { $items += @(Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json) } catch {}
+    # PowerShell 5.1's ConvertFrom-Json sends a JSON array down the pipeline as
+    # one object; assigning it first and adding element by element keeps two
+    # entries from printing as one merged line.
+    try {
+        $parsed = ConvertFrom-Json (Get-Content -LiteralPath $f.FullName -Raw)
+        foreach ($p in $parsed) { $items += $p }
+    } catch {}
 }
 if (-not $items.Count) { exit 0 }
 

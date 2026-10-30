@@ -8,7 +8,7 @@ BeforeAll {
         param([string]$Script, [string]$Arguments = '', [string]$Prelude = '', [scriptblock]$Arrange = {})
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
-        Copy-Item "$repoRoot\steps\$Script", "$repoRoot\steps\Deelevate.ps1" $case
+        Copy-Item "$repoRoot\steps\$Script", "$repoRoot\steps\Deelevate.ps1", "$repoRoot\steps\InUse.ps1" $case
         # Steps dot-source Deelevate.ps1, which would redefine Test-Elevated after
         # the prelude. CI runners are elevated, so override it in the copy itself.
         Add-Content "$case\Deelevate.ps1" 'function Test-Elevated { $false }'
@@ -43,6 +43,17 @@ Describe 'End-of-run manual update list' {
         $r.Output | Should -Match 'Sunshine \[LizardByte.Sunshine\] 1 -> 2'
         $r.Output | Should -Match 'Why: Git is in use'
     }
+    It 'prints each entry of one report on its own line' {
+        $r = Invoke-Step -Script 'Show-ManualUpdates.ps1' -Arrange {
+            param($case)
+            New-Item "$case\Upkeep\Reports" -ItemType Directory -Force | Out-Null
+            '[{"Source":"winget","Id":"Logitech.GHUB","Name":"Logitech G HUB","Current":"1","Available":"2","Reason":"reports success","Fix":"open it"},{"Source":"winget","Id":"Git.Git","Name":"Git","Current":"3","Available":"4","Reason":"Git is in use","Fix":"close it"}]' |
+                Set-Content "$case\Upkeep\Reports\manual-updates-winget.json"
+        }
+        $r.Output | Should -Match 'Needs a manual update \(2\)'
+        $r.Output | Should -Match 'Logitech G HUB \[Logitech.GHUB\] 1 -> 2'
+        $r.Output | Should -Match 'Git \[Git.Git\] 3 -> 4'
+    }
     It 'limits the list to the requested sources' {
         $r = Invoke-Step -Script 'Show-ManualUpdates.ps1' -Arguments '-Source winget' -Arrange {
             param($case)
@@ -63,6 +74,9 @@ function choco {
     if ($args[0] -eq 'outdated') { 'git.install|2.55.0|2.56.0|false'; 'git|2.55.0|2.56.0|false' }
 }
 function Get-ItemProperty { [pscustomobject]@{ InstallPath = 'C:\Program Files\Git' } }
+# The real uv and its live processes must not leak into these tests.
+function uv { Add-Content "$env:LOCALAPPDATA\calls.txt" ('uv ' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
+function Get-Process { if ($env:FAKE_UV_RUNNING -eq '1') { @([pscustomobject]@{ Name = 'uv' }, [pscustomobject]@{ Name = 'uv' }) } }
 '@
     }
     It 'pins Git for this run, names the processes and records it' {
@@ -72,7 +86,7 @@ function Get-CimInstance { @([pscustomobject]@{ Name = 'bash.exe'; ProcessId = 4
 '@)
         $r.Code | Should -Be 0
         $r.Calls | Should -Match 'pin add -n=git.install'
-        $r.Output | Should -Match 'in use by bash.exe \(PID 41\)'
+        $r.Output | Should -Match 'in use by bash.exe - holding it back'
         $report = Get-Content "$($r.Case)\Upkeep\Reports\manual-updates-choco.json" -Raw | ConvertFrom-Json
         $report.Id | Should -Be 'git.install'
         Test-Path "$($r.Case)\Upkeep\choco-held-pins.json" | Should -BeTrue
@@ -94,6 +108,27 @@ function Get-CimInstance { @([pscustomobject]@{ Name = 'code.exe'; ProcessId = 7
         $r.Calls | Should -Match 'pin remove -n=git.install'
         $r.Calls | Should -Not -Match 'pin remove -n=git '
         Test-Path "$($r.Case)\Upkeep\choco-held-pins.json" | Should -BeFalse
+    }
+    It 'skips topgrade''s uv step and upgrades uv tools directly while uv processes run' {
+        $prelude = "`$env:FAKE_UV_RUNNING = '1'`n" + $fakeChoco + "`nfunction Get-CimInstance { @() }`n"
+        $r = Invoke-Step -Script 'Protect-InUsePackages.ps1' -Arguments '-Action Hold' -Prelude $prelude
+        $r.Code | Should -Be 0
+        Get-Content "$($r.Case)\SystemUpdate\topgrade-extra-args.txt" | Should -Be '--disable uv'
+        $r.Calls | Should -Match 'uv tool upgrade --all'
+        $r.Output | Should -Match 'uv x2 running'
+    }
+    It 'leaves topgrade''s uv step alone when no uv process runs' {
+        $r = Invoke-Step -Script 'Protect-InUsePackages.ps1' -Arguments '-Action Hold' -Prelude ($fakeChoco + "`nfunction Get-CimInstance { @() }`n")
+        Test-Path "$($r.Case)\SystemUpdate\topgrade-extra-args.txt" | Should -BeFalse
+        $r.Calls | Should -Not -Match 'uv tool'
+    }
+    It 'removes the extra topgrade arguments on release' {
+        $r = Invoke-Step -Script 'Protect-InUsePackages.ps1' -Arguments '-Action Release' -Prelude $fakeChoco -Arrange {
+            param($case)
+            New-Item "$case\SystemUpdate" -ItemType Directory -Force | Out-Null
+            '--disable uv' | Set-Content "$case\SystemUpdate\topgrade-extra-args.txt"
+        }
+        Test-Path "$($r.Case)\SystemUpdate\topgrade-extra-args.txt" | Should -BeFalse
     }
 }
 

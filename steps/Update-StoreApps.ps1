@@ -36,6 +36,7 @@ $updated = 0
 $notServiced = 0   # package exists but the Store won't service it
 $noUpdate = 0      # package is up to date
 $stillRunning = 0  # hit the per-app timeout, still downloading in background
+$script:inUse = @()  # open apps the Store could not replace (0x80073D02)
 $errorCodes = @{}  # HRESULT -> count, so odd failures are visible in the log
 
 function Add-ErrorCode {
@@ -116,6 +117,14 @@ function Wait-ForInstallItem {
                 Write-Host "[store]   $($Label): managed outside the Store (winget/MSI) - skipped."
                 return 'skipped'
             }
+            if ($errText -match '0x80073D02') {
+                # "Resources it modifies are currently in use": the app is
+                # open (the Codex app, 2026-10-24 and -26). Closing it for the
+                # user is not ours to do; list it instead of failing the step.
+                Write-Host "[store]   $($Label): the app is open, so the Store cannot replace it - listed at the end."
+                $script:inUse += $Label
+                return 'inuse'
+            }
             Write-Host "[store]   $($Label): failed ($($st.InstallState) $errText)."
             return 'failed'
         }
@@ -155,6 +164,7 @@ try {
             'failed'  { $failed++ }
             'skipped' { $notServiced++ }
             'running' { $stillRunning++ }
+            'inuse'   { }
         }
     }
     $searchWorked = $true
@@ -193,6 +203,7 @@ if (-not $searchWorked) {
                 'failed'  { $failed++ }
                 'skipped' { $notServiced++ }
                 'running' { $stillRunning++ }
+                'inuse'   { }
             }
         }
         catch {
@@ -210,6 +221,7 @@ if (-not $searchWorked) {
 # --- Summary ---------------------------------------------------------------
 $parts = @("updated: $updated", "failed: $failed", "not serviced by the Store: $notServiced")
 if ($stillRunning -gt 0) { $parts += "still downloading in background: $stillRunning" }
+if ($script:inUse.Count -gt 0) { $parts += "open, listed for a manual update: $($script:inUse.Count)" }
 if (-not $searchWorked) { $parts += "already current: $noUpdate" }
 Write-Host "[store] Done. $($parts -join ', ')."
 
@@ -220,6 +232,16 @@ if ($errorCodes.Count -gt 0) {
 }
 if ($updated -eq 0 -and $failed -eq 0 -and $stillRunning -eq 0) {
     Write-Host '[store] No Store apps needed updating this run.'
+}
+
+if ($script:inUse.Count -gt 0) {
+    $dir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    ConvertTo-Json -Depth 3 -InputObject @($script:inUse | ForEach-Object {
+            [pscustomobject]@{ Source = 'store'; Id = $_; Name = ($_ -replace '_[a-z0-9]{13}$', '')
+                Reason = 'the app was open, so the Store could not replace its files (0x80073D02)'
+                Fix = 'Close the app; the Store finishes the update in the background, or run Upkeep again.' }
+        }) | Set-Content -LiteralPath (Join-Path $dir 'manual-updates-store.json') -Encoding UTF8
 }
 
 if ($failed -gt 0) { exit 1 } else { exit 0 }

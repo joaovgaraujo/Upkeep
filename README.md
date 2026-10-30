@@ -96,6 +96,14 @@ needs it. That has consequences worth understanding:
   26H2 step lists it under "Needs a manual update" instead of asking for a
   restart that would not help. An App Installer upgrade that reports success
   is not installed a second time.
+- **Programs in use no longer fail the run (1.8.4).** While `uv run` or
+  `uvx` processes are running, topgrade's uv step is skipped for that run and
+  `uv tool upgrade --all` runs directly; only uv's cache cleanup waits for
+  another run. Git for Windows is held back in winget as well as Chocolatey
+  while Git Bash or anything else from its folder is running. Apps whose
+  installer reports success while Windows keeps listing the old version, and
+  Store apps that are open (`0x80073D02`), go under "Needs a manual update"
+  instead of turning their row red.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

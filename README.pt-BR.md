@@ -88,6 +88,15 @@ vale entender:
   o 26H2 exige antes, a etapa do 26H2 a lista em "Needs a manual update" em
   vez de pedir uma reinicialização que não resolveria. Uma atualização do
   App Installer que informa sucesso não é instalada uma segunda vez.
+- **Programas em uso não fazem mais a execução falhar (1.8.4).** Enquanto
+  houver processos `uv run` ou `uvx` abertos, a etapa de uv do topgrade fica
+  de fora naquela execução e `uv tool upgrade --all` roda diretamente; só a
+  limpeza do cache do uv fica para outra vez. O Git for Windows é segurado no
+  winget, além do Chocolatey, enquanto o Git Bash ou outro programa da pasta
+  dele estiver aberto. Apps cujo instalador informa sucesso enquanto o
+  Windows continua mostrando a versão antiga, e apps da Loja que estão
+  abertos (`0x80073D02`), vão para "Needs a manual update" em vez de deixar a
+  linha vermelha.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

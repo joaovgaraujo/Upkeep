@@ -92,6 +92,7 @@ if ($selectionMode) {
 }
 
 . (Join-Path $PSScriptRoot 'Deelevate.ps1')
+. (Join-Path $PSScriptRoot 'InUse.ps1')
 
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     # Exit 2 = "nothing to do here", not a failure - the engine already
@@ -212,6 +213,26 @@ $script:selfUpdating = @{
     'Microsoft.Edge' = 'Edge updates itself. Open edge://settings/help to finish the update.'
 }
 $script:selfUpdateAttempt = @{}
+
+# Installers that abort when their program is in use and that must not be
+# closed for the user. Git for Windows cancels its own setup ("The following
+# process(es) use Git for Windows ... Defaulting to Cancel", exit 1) while any
+# bash.exe, ssh.exe or sleep.exe from its folder runs - and terminals and
+# Claude Code sessions keep those alive. It failed winget on 2026-10-24, -26
+# and -28. Not started while in use; listed for a manual update instead.
+$script:blockedWhileInUse = @{
+    'Git.Git' = @{ Name = 'Git for Windows'; Folder = { Get-GitInstallDir } }
+}
+
+# Names what holds $Id's program open, or $null when nothing does.
+function Get-InUseBlocker {
+    param([string]$Id)
+    $spec = $script:blockedWhileInUse[$Id]
+    if (-not $spec) { return $null }
+    $users = @(Get-FolderProcesses -Folder (& $spec.Folder))
+    if (-not $users.Count) { return $null }
+    [pscustomobject]@{ Name = $spec.Name; Folder = (& $spec.Folder); List = (Format-ProcessCounts $users) }
+}
 
 # See the note after the upgrade pass.
 $script:wingetItself = 'Microsoft.AppInstaller'
@@ -356,6 +377,11 @@ function Invoke-WingetUpgrade {
         return $script:etcherWorkerAttempt
     }
     if ($script:selfUpdating.ContainsKey($Id)) { return Invoke-SelfUpdate -Id $Id }
+    $blocker = Get-InUseBlocker -Id $Id
+    if ($blocker) {
+        return [pscustomobject]@{ ExitCode = 1; InUse = $blocker
+            Output = "[winget]   $Id : not started - $($blocker.Name) is in use by $($blocker.List)." }
+    }
     $restart = Stop-AppForUpgrade -Id $Id
     try {
         $out = winget upgrade --id $Id --exact --include-unknown --silent --disable-interactivity `
@@ -415,7 +441,7 @@ function Write-StepOutput {
 # `--all` would still reinstall anything the inventory filtered out, so any
 # exclusion switches to per-package upgrades of exactly what is listed.
 # Apps that must be closed first, or that update themselves, need the same.
-$special = @($before.Keys | Where-Object { $script:closeBeforeUpgrade.ContainsKey($_) -or $script:selfUpdating.ContainsKey($_) })
+$special = @($before.Keys | Where-Object { $script:closeBeforeUpgrade.ContainsKey($_) -or $script:selfUpdating.ContainsKey($_) -or $script:blockedWhileInUse.ContainsKey($_) })
 if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0) {
     $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' })
     for ($i = 0; $i -lt $ids.Count; $i++) {
@@ -465,6 +491,7 @@ if ($stuck.Count -eq 0) {
 # Ask winget package-by-package so we can print the REASON, not just the name.
 Write-Host "[winget] $($stuck.Count) package(s) did not upgrade yet; checking each one:"
 $notApplicable = @()
+$successButPending = @()
 foreach ($id in $stuck) {
     if ($script:selfUpdating.ContainsKey($id)) {
         Add-ManualUpdate -Id $id -Reason 'updates itself, not through winget' -Fix $script:selfUpdating[$id]
@@ -475,6 +502,13 @@ foreach ($id in $stuck) {
     $code = $attempt.ExitCode
     if ($LogFile) {
         try { $res | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
+    }
+
+    if ($attempt.PSObject.Properties['InUse']) {
+        $b = $attempt.InUse
+        Add-ManualUpdate -Id $id -Reason "$($b.Name) is in use by $($b.List)" `
+            -Fix "Close Git Bash, terminals and tools running from $($b.Folder) (Claude Code sessions start bash.exe), then run: winget upgrade --id $id -e"
+        continue
     }
 
     # -1978335107 (0x8A15007D): winget refuses to touch a user-scope package
@@ -570,6 +604,7 @@ foreach ($id in $stuck) {
     }
     elseif ($code -eq 0) {
         Write-Host "[winget]   $id : installer returned success; checking the installed version below."
+        $successButPending += $id
     }
     else {
         $short = ($res -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
@@ -615,6 +650,16 @@ $remaining = Get-PendingUpgrades
 foreach ($key in @($remaining.Keys)) { if (-not $before.ContainsKey($key)) { $remaining.Remove($key) } }
 if ($wingetReplaced) { $remaining.Remove($script:wingetItself) }
 if ($RetryFailed) { foreach ($key in @($remaining.Keys)) { if ($retryIds -notcontains $key) { $remaining.Remove($key) } } }
+# The installer said it succeeded twice and Windows still lists the old
+# version: the app updates itself after launch or reports its version in a
+# form winget can't match (Logitech G HUB, ChatGPT; 2026-10-24 to -28). Running
+# the same installer a third time next run changes nothing.
+foreach ($id in $successButPending) {
+    if ($remaining.ContainsKey($id) -and -not $manual.Contains($id)) {
+        Add-ManualUpdate -Id $id -Reason 'its installer reports success, but Windows still lists the old version' `
+            -Fix 'Open the app once so it can finish updating itself. If winget keeps listing it, use "Ignore this app" under Review and update.'
+    }
+}
 # Apps winget can't update here are reported, not failed, and are kept out of
 # the retry list: retrying them changes nothing.
 $manualLeft = @($remaining.Keys | Where-Object { $manual.Contains($_) })
