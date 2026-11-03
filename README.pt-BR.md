@@ -110,7 +110,12 @@ vale entender:
   Claude Code do WinGet pode ficar várias versões atrás do npm. Em Confirmar
   atualizações há a opção "Atualizar por" para cada ferramenta, salva no
   `settings.json` em `AiCliChannels`. Uma troca instala pelo novo método,
-  confere, e só então remove a instalação antiga.
+  confere, e só então remove a instalação antiga. (A 1.8.6 saiu com esta
+  etapa falhando em toda execução; corrigido na 1.8.7.)
+- **O Battle.net fica com o próprio atualizador (1.8.7).** O winget não
+  consegue atualizá-lo sem um local de instalação, então a etapa do winget o
+  pula; o Battle.net se atualiza quando o Upkeep o abre depois das
+  atualizações.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

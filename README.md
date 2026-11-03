@@ -117,6 +117,10 @@ needs it. That has consequences worth understanding:
   several releases. Confirm updates has an "Update with" choice per tool,
   saved in `settings.json` under `AiCliChannels`. A switch installs through
   the new method, checks it, and only then removes the old install.
+  (1.8.6 shipped with this step failing on every run; fixed in 1.8.7.)
+- **Battle.net is left to its own updater (1.8.7).** winget cannot upgrade
+  it without an install location, so the winget step skips it; Battle.net
+  updates itself when Upkeep starts it after the updates.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

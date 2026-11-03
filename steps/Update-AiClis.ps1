@@ -49,8 +49,12 @@
 param(
     [string]$LogFile,
     [switch]$Detect,
-    [string]$SettingsPath = (Join-Path (Split-Path $PSScriptRoot -Parent) 'settings.json')
+    # Defaults to settings.json next to the steps folder (set below:
+    # Windows PowerShell 5.1 leaves $PSScriptRoot empty in a param default
+    # when the script is started with -File, which is how the engine runs it).
+    [string]$SettingsPath
 )
+if (-not $SettingsPath) { $SettingsPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'settings.json' }
 
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'Deelevate.ps1')

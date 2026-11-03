@@ -237,6 +237,28 @@ function winget {
         $json[0].Preferred | Should -Be 'npm'
         $r.Calls | Should -Not -Match 'install|uninstall'
     }
+    It 'starts with -File and no settings path, as the engine and the dashboard run it' {
+        # 1.8.6 put $PSScriptRoot in a param() default; Windows PowerShell 5.1
+        # leaves it empty there under -File, so every real run failed.
+        $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        New-Item "$case\steps" -ItemType Directory -Force | Out-Null
+        Copy-Item "$repoRoot\steps\Update-AiClis.ps1", "$repoRoot\steps\Deelevate.ps1" "$case\steps"
+        '{"AiCliChannels":{}}' | Set-Content "$case\settings.json"
+        $old = $env:PATH, $env:LOCALAPPDATA, $env:APPDATA, $env:USERPROFILE
+        try {
+            # No npm or winget on PATH, so nothing is queried or installed.
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+            $env:LOCALAPPDATA = $case; $env:APPDATA = "$case\Roaming"; $env:USERPROFILE = "$case\Home"
+            $detect = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$case\steps\Update-AiClis.ps1" -Detect 2>&1 | Out-String
+            $detectCode = $LASTEXITCODE
+            $run = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$case\steps\Update-AiClis.ps1" 2>&1 | Out-String
+            $runCode = $LASTEXITCODE
+        } finally { $env:PATH, $env:LOCALAPPDATA, $env:APPDATA, $env:USERPROFILE = $old }
+        $detectCode | Should -Be 0
+        $detect.Trim() | Should -Be '[]'
+        $runCode | Should -Be 2
+        $run | Should -Not -Match 'Cannot bind argument'
+    }
     It 'only switches, and reports skipped, when other updaters are off' {
         $prelude = "`$env:DASHBOARD_SKIP_OTHER_APPS = '1'`n" + $fakes
         $r = Invoke-Step -Script 'Update-AiClis.ps1' -Prelude $prelude -Arguments '-SettingsPath "$env:LOCALAPPDATA\settings.json"' -Arrange {

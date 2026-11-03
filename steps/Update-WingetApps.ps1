@@ -176,6 +176,19 @@ function Get-PendingUpgrades {
     }
     # Never individually retry the installer that caused an unsolicited reboot.
     $result.Remove('ElectronicArts.EADesktop')
+    # Launchers that update themselves when they start, which Upkeep does
+    # after the updates (steps\Start-Launchers.ps1). winget cannot upgrade
+    # Battle.net at all: its manifest requires --location, so it failed with
+    # -1978335137 "Install location is required" on the test laptop (2026-11-03), and
+    # its version reads Unknown, so it came back on every run.
+    foreach ($key in @($script:launcherUpdatesItself.Keys)) {
+        if (-not $result.ContainsKey($key)) { continue }
+        $result.Remove($key)
+        if (-not $InventoryOnly -and -not $script:launcherNoted.ContainsKey($key)) {
+            $script:launcherNoted[$key] = $true
+            Write-Host "[winget] $key : skipped - $($script:launcherUpdatesItself[$key])"
+        }
+    }
     foreach ($key in @($result.Keys)) {
         if ($ignoredIds -contains $key -or ($selectionMode -and $selectedIds -notcontains $key)) { $result.Remove($key); continue }
         $installed = Get-NameVersion -Name $result[$key].Name
@@ -212,6 +225,10 @@ function Get-NameVersion {
     ConvertTo-LooseVersion $m.Groups[1].Value
 }
 $script:versionGuarded = @{}
+$script:launcherUpdatesItself = @{
+    'Blizzard.BattleNet' = 'Battle.net updates itself when it starts, and Upkeep starts it after the updates.'
+}
+$script:launcherNoted = @{}
 
 # Installers that refuse to run while their app is open. The engine starts
 # Epic before this step (steps\Start-Launchers.ps1), so Epic's MSI always hit
@@ -478,7 +495,11 @@ $special = @($before.Keys | Where-Object { $script:closeBeforeUpgrade.ContainsKe
 # Per-package exit codes from the first pass, so the recheck below does not
 # run an installer a second time when it already returned success.
 $firstExit = @{}
-if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0 -or $skipNoop.Count -gt 0) {
+# Packaged apps (MSIX) that winget staged while the app was open: "Successfully
+# installed. Restart the application to complete the upgrade." ChatGPT on
+# the test laptop, 2026-11-03. Windows swaps the version in when the app restarts.
+$restartPending = @{}
+if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0 -or $skipNoop.Count -gt 0 -or $script:launcherNoted.Count -gt 0) {
     $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' -and $skipNoop -notcontains $_ })
     for ($i = 0; $i -lt $ids.Count; $i++) {
         $id = $ids[$i]
@@ -488,6 +509,7 @@ if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:vers
         Write-StepOutput $attempt.Output
         Write-StepOutput ("[winget] ({0}/{1}) {2} finished in {3:N0}s (exit {4})." -f ($i + 1), $ids.Count, $id, ((Get-Date) - $started).TotalSeconds, $attempt.ExitCode)
         if (-not $attempt.PSObject.Properties['InUse']) { $firstExit[$id] = $attempt.ExitCode }
+        if ("$($attempt.Output)" -match 'Restart the application to complete') { $restartPending[$id] = $true }
         if ($attempt.ExitCode -ne 0) { $upgradeExit = $attempt.ExitCode }
         if ($id -eq $script:wingetItself -and $attempt.ExitCode -eq 0) { $wingetReplaced = $true }
     }
@@ -651,6 +673,7 @@ foreach ($id in $stuck) {
             -Fix "Back up its settings, then reinstall once: winget uninstall --id $id -e; winget install --id $id -e"
     }
     elseif ($code -eq 0) {
+        if ($res -match 'Restart the application to complete') { $restartPending[$id] = $true }
         Write-Host "[winget]   $id : installer returned success; checking the installed version below."
         $successButPending += $id
     }
@@ -704,6 +727,12 @@ if ($RetryFailed) { foreach ($key in @($remaining.Keys)) { if ($retryIds -notcon
 # the same installer a third time next run changes nothing.
 $noopNext = [ordered]@{}
 foreach ($id in $successButPending) {
+    if ($remaining.ContainsKey($id) -and -not $manual.Contains($id) -and $restartPending.ContainsKey($id)) {
+        # Not recorded as a no-op install: it lands once the app restarts.
+        Add-ManualUpdate -Id $id -Reason 'winget installed the new version, and Windows switches to it when the app restarts' `
+            -Fix 'Close the app completely (including from the system tray) and open it again.'
+        continue
+    }
     if ($remaining.ContainsKey($id) -and -not $manual.Contains($id)) {
         Add-ManualUpdate -Id $id -Reason 'its installer reports success, but Windows still lists the old version' `
             -Fix 'Open the app once so it can finish updating itself. If winget keeps listing it, use "Ignore this app" under Review and update.'
