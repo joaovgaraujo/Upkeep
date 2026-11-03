@@ -147,6 +147,8 @@ pub struct DashboardApp {
     updates_loading: bool,
     updates_checked: bool,
     updates_error: Option<String>,
+    /// Claude Code / Codex CLI installs found by the last update check.
+    ai_cli_tools: Vec<crate::updates::AiCliTool>,
     selected_update_ids: Option<Vec<String>>,
     update_plan: Option<crate::updates::UpdatePlan>,
     run_other_apps: bool,
@@ -347,6 +349,7 @@ impl DashboardApp {
             updates_loading: false,
             updates_checked: false,
             updates_error: None,
+            ai_cli_tools: Vec::new(),
             selected_update_ids: None,
             update_plan: None,
             run_other_apps: true,
@@ -568,6 +571,15 @@ impl DashboardApp {
                         Err(e) => {
                             self.update_items.clear();
                             self.updates_error = Some(e);
+                        }
+                    }
+                }
+                AppEvent::AiCliChannels(result) => {
+                    // A failed detection only hides the choice; updates still run.
+                    self.ai_cli_tools = result.unwrap_or_default();
+                    if let Some(plan) = self.update_plan.as_mut() {
+                        if plan.ai_cli.is_empty() {
+                            plan.ai_cli = self.ai_cli_tools.clone();
                         }
                     }
                 }
@@ -2010,6 +2022,14 @@ impl DashboardApp {
         self.updates_error = None;
         let tx = self.tx.clone();
         let ctx = ctx.clone();
+        {
+            let (root, tx, ctx) = (root.clone(), tx.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                let result = crate::updates::ai_cli_channels(&root);
+                let _ = tx.send(AppEvent::AiCliChannels(result));
+                ctx.request_repaint();
+            });
+        }
         std::thread::spawn(move || {
             let result = crate::updates::inventory(&root);
             let _ = tx.send(AppEvent::UpdateInventory(result));
@@ -2211,6 +2231,9 @@ impl DashboardApp {
         let Some(plan) = self.update_plan.as_mut() else {
             return;
         };
+        if plan.ai_cli.is_empty() && !self.ai_cli_tools.is_empty() {
+            plan.ai_cli = self.ai_cli_tools.clone();
+        }
         let pt = self.lang == Lang::PtBr;
         let mut confirm = false;
         let mut cancel = false;
@@ -2283,6 +2306,69 @@ impl DashboardApp {
                                 ui.add_space(2.0);
                             });
                         }
+                        if !plan.ai_cli.is_empty() {
+                            ui.separator();
+                            ui.strong("Claude Code / Codex CLI");
+                            ui.label(if pt {
+                                "Escolha por onde cada um é instalado e atualizado. Ao trocar, o Upkeep instala pelo novo método, confere, e só então remove o antigo."
+                            } else {
+                                "Choose how each one is installed and updated. When you switch, Upkeep installs through the new method, checks it, and only then removes the old one."
+                            });
+                        }
+                        for tool in &mut plan.ai_cli {
+                            ui.push_id(tool.key.clone(), |ui| {
+                                ui.add_space(2.0);
+                                let installed = tool
+                                    .installs
+                                    .iter()
+                                    .map(|i| format!("{} {}", crate::updates::method_label(&i.method, pt), i.version))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(egui::RichText::new(&tool.name).size(17.0).strong());
+                                    ui.label(if pt { format!("Instalado: {installed}") } else { format!("Installed: {installed}") });
+                                });
+                                if let Some((method, version)) = tool.newer_method() {
+                                    let label = crate::updates::method_label(&method, pt);
+                                    ui.colored_label(theme::warn_amber(), if pt {
+                                        format!("{label} já tem a versão {version}.")
+                                    } else {
+                                        format!("{label} already has version {version}.")
+                                    });
+                                }
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(if pt { "Atualizar por:" } else { "Update with:" });
+                                    let current = crate::updates::method_label(&tool.preferred, pt);
+                                    egui::ComboBox::from_id_salt("ai_cli_method")
+                                        .selected_text(current)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(&mut tool.preferred, String::new(), crate::updates::method_label("", pt));
+                                            for method in tool.targets.clone() {
+                                                let text = match tool.latest.get(&method) {
+                                                    Some(v) => format!("{} ({v})", crate::updates::method_label(&method, pt)),
+                                                    None => crate::updates::method_label(&method, pt).to_string(),
+                                                };
+                                                ui.selectable_value(&mut tool.preferred, method, text);
+                                            }
+                                        });
+                                });
+                                if tool.switch_pending() {
+                                    let new = crate::updates::method_label(&tool.preferred, pt);
+                                    let old = tool
+                                        .installs
+                                        .iter()
+                                        .filter(|i| i.method != tool.preferred)
+                                        .map(|i| crate::updates::method_label(&i.method, pt))
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                    ui.label(egui::RichText::new(if pt {
+                                        format!("Esta execução troca {old} por {new}. A escolha fica salva para as próximas.")
+                                    } else {
+                                        format!("This run replaces {old} with {new}. The choice is saved for later runs.")
+                                    }).color(theme::accent_green()));
+                                }
+                            });
+                        }
                         if offered.iter().any(|value| *value) {
                             ui.separator();
                             ui.strong(if pt { "Serviços incluídos" } else { "Included services" });
@@ -2312,10 +2398,30 @@ impl DashboardApp {
         if cancel || response.should_close() {
             self.update_plan = None;
         } else if confirm {
-            let plan = self.update_plan.take().unwrap();
+            let mut plan = self.update_plan.take().unwrap();
+            // Save the AI CLI choices, and do not let winget upgrade an
+            // install that this run is about to replace.
+            for tool in &plan.ai_cli {
+                self.settings.set_ai_cli_channel(&tool.key, &tool.preferred);
+                if tool.preferred == "npm" || tool.preferred == "native" {
+                    for item in plan.items.iter_mut().filter(|i| i.id == tool.winget_id) {
+                        item.selected = false;
+                    }
+                }
+            }
+            if !plan.ai_cli.is_empty() {
+                if let Some(root) = &self.root {
+                    if let Err(e) = settings::save_settings(root, &self.settings) {
+                        self.push_error(format!("Could not save the AI CLI choice: {e}"));
+                    }
+                }
+                self.ai_cli_tools = plan.ai_cli.clone();
+            }
+            let switching = plan.ai_cli.iter().any(|tool| tool.switch_pending());
             self.selected_update_ids = Some(plan.selected_ids());
-            self.cat_apps =
-                !self.selected_update_ids.as_ref().unwrap().is_empty() || plan.other_apps;
+            self.cat_apps = !self.selected_update_ids.as_ref().unwrap().is_empty()
+                || plan.other_apps
+                || switching;
             self.cat_windows_update = plan.windows;
             self.cat_feature_update = plan.feature;
             self.cat_store = plan.store;
@@ -5281,6 +5387,27 @@ mod tests {
                             store: true,
                             steam: true,
                             other_apps: true,
+                            // A lagging WinGet install with a switch to npm chosen,
+                            // so the AI CLI section is laid out too.
+                            ai_cli: vec![crate::updates::AiCliTool {
+                                key: "claude-code".into(),
+                                name: "Claude Code".into(),
+                                winget_id: "Anthropic.ClaudeCode".into(),
+                                installs: vec![crate::updates::AiCliInstall {
+                                    method: "winget".into(),
+                                    version: "2.1.302".into(),
+                                }],
+                                latest: [
+                                    ("npm", "2.1.317"),
+                                    ("native", "2.1.317"),
+                                    ("winget", "2.1.302"),
+                                ]
+                                .into_iter()
+                                .map(|(m, v)| (m.to_string(), v.to_string()))
+                                .collect(),
+                                targets: vec!["npm".into(), "native".into(), "winget".into()],
+                                preferred: "npm".into(),
+                            }],
                             ..Default::default()
                         });
                     }

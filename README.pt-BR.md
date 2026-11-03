@@ -104,6 +104,13 @@ vale entender:
   própria Loja ou ainda na fila. Um instalador do winget que informou sucesso
   sem mudar a versão (Logitech G HUB) não roda de novo até o winget oferecer
   uma versão mais nova.
+- **Escolha como o Claude Code e o Codex CLI são instalados (1.8.6).** A
+  verificação de atualizações encontra cada instalação (npm, o instalador
+  próprio da ferramenta, WinGet) e a versão que cada método oferece; o
+  Claude Code do WinGet pode ficar várias versões atrás do npm. Em Confirmar
+  atualizações há a opção "Atualizar por" para cada ferramenta, salva no
+  `settings.json` em `AiCliChannels`. Uma troca instala pelo novo método,
+  confere, e só então remove a instalação antiga.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

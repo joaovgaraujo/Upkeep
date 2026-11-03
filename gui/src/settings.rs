@@ -118,6 +118,25 @@ pub fn resolve_root() -> Option<PathBuf> {
     None
 }
 
+impl Settings {
+    /// Saves the install method chosen for an AI CLI ("" keeps the current
+    /// one) under "AiCliChannels", which `steps\Update-AiClis.ps1` and
+    /// `steps\Update-WingetApps.ps1` read.
+    pub fn set_ai_cli_channel(&mut self, key: &str, method: &str) {
+        let entry = self
+            .extra
+            .entry("AiCliChannels".to_string())
+            .or_insert_with(|| serde_json::Value::Object(Default::default()));
+        if !entry.is_object() {
+            *entry = serde_json::Value::Object(Default::default());
+        }
+        entry.as_object_mut().unwrap().insert(
+            key.to_string(),
+            serde_json::Value::String(method.to_string()),
+        );
+    }
+}
+
 pub fn settings_path(root: &Path) -> PathBuf {
     root.join("settings.json")
 }

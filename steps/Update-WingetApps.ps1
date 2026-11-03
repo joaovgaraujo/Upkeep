@@ -84,8 +84,23 @@ if ($env:DASHBOARD_SKIP_OTHER_APPS -eq '1') { $NoChocoFallback = $true }
 $ignorePath = Join-Path $env:LOCALAPPDATA 'Upkeep\winget-ignore.json'
 $ignoredIds = @()
 if (Test-Path -LiteralPath $ignorePath) { $ignoredIds = @((Get-Content -LiteralPath $ignorePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)) }
+# A Claude Code / Codex CLI install the AI CLI step is about to replace with
+# another method (settings.json AiCliChannels) is not upgraded here first.
+$aiCliWinget = @{ 'claude-code' = 'Anthropic.ClaudeCode'; 'codex' = 'OpenAI.Codex' }
+$settingsPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'settings.json'
+if (Test-Path -LiteralPath $settingsPath) {
+    try {
+        $channels = (Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).AiCliChannels
+        if ($channels) {
+            foreach ($p in $channels.PSObject.Properties) {
+                $want = "$($p.Value)".Trim().ToLower()
+                if ($aiCliWinget.ContainsKey($p.Name) -and $want -in @('npm', 'native')) { $ignoredIds += $aiCliWinget[$p.Name] }
+            }
+        }
+    } catch {}
+}
 $selectedIds = @()
-$selectionMode = -not [string]::IsNullOrWhiteSpace($env:UPKEEP_SELECTED_IDS)
+$selectionMode =-not [string]::IsNullOrWhiteSpace($env:UPKEEP_SELECTED_IDS)
 if ($selectionMode) {
     $selectedIds = @(($env:UPKEEP_SELECTED_IDS | ConvertFrom-Json -ErrorAction Stop))
     foreach ($id in $selectedIds) { if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9._+\-]+$') { throw 'Invalid selected package ID.' } }

@@ -111,6 +111,12 @@ needs it. That has consequences worth understanding:
   cancelled by the Store, or still queued. A winget installer that reported
   success without changing the version (Logitech G HUB) is not run again
   until winget offers a newer version.
+- **Choose how Claude Code and the Codex CLI are installed (1.8.6).** The
+  update check finds each install (npm, the tool's own installer, WinGet)
+  and the version every method offers; WinGet's Claude Code can lag npm by
+  several releases. Confirm updates has an "Update with" choice per tool,
+  saved in `settings.json` under `AiCliChannels`. A switch installs through
+  the new method, checks it, and only then removes the old install.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

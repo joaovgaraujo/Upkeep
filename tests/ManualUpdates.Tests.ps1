@@ -171,3 +171,79 @@ function npm {
         $r.Code | Should -Be 2
     }
 }
+
+Describe 'Moving Claude Code to another install method' {
+    BeforeAll {
+        # Fake npm and winget. winget lists Claude Code at 2.1.302 until
+        # `winget uninstall` runs; npm offers 2.1.317.
+        $fakes = @'
+function npm {
+    Add-Content "$env:LOCALAPPDATA\calls.txt" ("npm " + ($args -join ' '))
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq 'root') { "$env:APPDATA\npm\node_modules"; return }
+    if ($args[0] -eq 'view') { '2.1.317'; return }
+    if ($args[0] -eq 'install') {
+        if ($env:FAKE_NPM_FAIL -eq '1') { $global:LASTEXITCODE = 1; 'npm ERR! code EBUSY'; return }
+        New-Item "$env:APPDATA\npm\node_modules\@anthropic-ai\claude-code" -ItemType Directory -Force | Out-Null
+        Set-Content "$env:APPDATA\npm\node_modules\@anthropic-ai\claude-code\package.json" '{"version":"2.1.317"}'
+    }
+}
+function winget {
+    Add-Content "$env:LOCALAPPDATA\calls.txt" ("winget " + ($args -join ' '))
+    $global:LASTEXITCODE = 0
+    $gone = Test-Path "$env:LOCALAPPDATA\winget-removed"
+    if ($args[0] -eq 'uninstall') { New-Item "$env:LOCALAPPDATA\winget-removed" -ItemType File | Out-Null; 'Successfully uninstalled'; return }
+    if ($args[0] -eq 'show') { 'Found Claude Code [Anthropic.ClaudeCode]'; 'Version: 2.1.302'; 'Publisher: Anthropic PBC'; return }
+    if ($args[0] -eq 'list') {
+        if ($args -notcontains 'Anthropic.ClaudeCode' -or $gone) { $global:LASTEXITCODE = -1978335212; 'No installed package found'; return }
+        'Name          Id                    Version  Source'
+        '-----------------------------------------------------'
+        'Claude Code   Anthropic.ClaudeCode  2.1.302  winget'
+    }
+}
+'@
+        $settings = {
+            param($case)
+            '{"AiCliChannels":{"claude-code":"npm"}}' | Set-Content "$case\settings.json"
+        }
+    }
+    It 'installs through npm first, then removes the winget install' {
+        $r = Invoke-Step -Script 'Update-AiClis.ps1' -Prelude $fakes -Arrange $settings -Arguments '-SettingsPath "$env:LOCALAPPDATA\settings.json"'
+        $r.Code | Should -Be 0
+        $r.Output | Should -Match 'switching from winget 2.1.302 to npm'
+        $r.Output | Should -Match 'winget install removed'
+        $calls = $r.Calls -split "`r?`n"
+        $install = [array]::IndexOf($calls, ($calls | Where-Object { $_ -match 'npm install -g @anthropic-ai/claude-code@latest' } | Select-Object -First 1))
+        $remove = [array]::IndexOf($calls, ($calls | Where-Object { $_ -match 'winget uninstall --id Anthropic.ClaudeCode' } | Select-Object -First 1))
+        $install | Should -BeGreaterOrEqual 0
+        $remove | Should -BeGreaterThan $install
+    }
+    It 'keeps the winget install when the npm install fails' {
+        $r = Invoke-Step -Script 'Update-AiClis.ps1' -Prelude ("`$env:FAKE_NPM_FAIL = '1'`n" + $fakes) -Arrange $settings -Arguments '-SettingsPath "$env:LOCALAPPDATA\settings.json"'
+        $r.Code | Should -Be 3
+        $r.Calls | Should -Not -Match 'winget uninstall'
+        $report = Get-Content "$($r.Case)\Upkeep\Reports\manual-updates-cli.json" -Raw | ConvertFrom-Json
+        $report.Reason | Should -Match 'switch to npm failed.*current install was kept'
+    }
+    It 'reports each install method and what the others offer' {
+        $r = Invoke-Step -Script 'Update-AiClis.ps1' -Prelude $fakes -Arrange $settings -Arguments '-Detect -SettingsPath "$env:LOCALAPPDATA\settings.json"'
+        $r.Code | Should -Be 0
+        $json = @($r.Output | ConvertFrom-Json)
+        $json[0].Key | Should -Be 'claude-code'
+        $json[0].Installs[0].Method | Should -Be 'winget'
+        $json[0].Installs[0].Version | Should -Be '2.1.302'
+        $json[0].Latest.npm | Should -Be '2.1.317'
+        $json[0].Latest.winget | Should -Be '2.1.302'
+        $json[0].Preferred | Should -Be 'npm'
+        $r.Calls | Should -Not -Match 'install|uninstall'
+    }
+    It 'only switches, and reports skipped, when other updaters are off' {
+        $prelude = "`$env:DASHBOARD_SKIP_OTHER_APPS = '1'`n" + $fakes
+        $r = Invoke-Step -Script 'Update-AiClis.ps1' -Prelude $prelude -Arguments '-SettingsPath "$env:LOCALAPPDATA\settings.json"' -Arrange {
+            param($case)
+            '{"AiCliChannels":{"claude-code":""}}' | Set-Content "$case\settings.json"
+        }
+        $r.Code | Should -Be 4
+        $r.Calls | Should -Not -Match 'npm install|winget (un)?install'
+    }
+}

@@ -307,11 +307,14 @@ rem -- Claude Code and Codex CLI, whatever installed them --------------------
 rem    npm globals are not touched by topgrade here (its "node" step is
 rem    disabled) and the native/standalone installs only update through their
 rem    own `update` command, so neither moved before this step existed.
+rem    It also runs with "other updaters" off: then it only moves a tool to
+rem    the install method chosen under Confirm updates (settings.json
+rem    AiCliChannels) and exits 4 when there was nothing to move.
 set "AICLI_STATUS=skipped"
-if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
+if not "%DASHBOARD_SKIP_APPS%"=="1" (
 set "AICLI_STATUS=ok"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-AiClis.ps1" -LogFile "%LOGFILE%"
-if "!errorLevel!"=="2" (set "AICLI_STATUS=not installed") else if "!errorLevel!"=="3" (set "AICLI_STATUS=ok - manual update listed above") else if not "!errorLevel!"=="0" set "AICLI_STATUS=error"
+if "!errorLevel!"=="2" (set "AICLI_STATUS=not installed") else if "!errorLevel!"=="3" (set "AICLI_STATUS=ok - manual update listed above") else if "!errorLevel!"=="4" (set "AICLI_STATUS=skipped") else if not "!errorLevel!"=="0" set "AICLI_STATUS=error"
 )
 
 rem -- Find packages winget lists as needing "explicit targeting" (this is
