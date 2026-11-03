@@ -411,6 +411,20 @@ function Add-ManualUpdate {
     }
     Write-Host "[winget]   $Id : needs a manual update ($Reason) - listed at the end of the run."
 }
+# Packages whose installer returned success while Windows kept listing the old
+# version, recorded as id -> the version winget offered. Logitech G HUB does
+# this every run: its bootstrapper exits 0 and the ARP version never moves, so
+# each run spent 1-3 minutes on it, twice (first pass and recheck), for
+# nothing. While winget still offers that same version, it is listed for a
+# manual update without running the installer again. A newer version clears it.
+$noopPath = Join-Path $reportDir 'winget-noop-installs.json'
+$noop = @{}
+if (Test-Path -LiteralPath $noopPath) {
+    try {
+        $saved = Get-Content -LiteralPath $noopPath -Raw | ConvertFrom-Json
+        foreach ($prop in $saved.PSObject.Properties) { $noop[$prop.Name] = "$($prop.Value)" }
+    } catch {}
+}
 $retryIds = @()
 if ($RetryFailed) {
     if (-not (Test-Path -LiteralPath $retryPath)) { Write-Host 'No previous failed-app report.'; exit 2 }
@@ -424,6 +438,10 @@ if ($RetryFailed) {
 }
 ConvertTo-Json -InputObject @($before.Keys) | Set-Content -LiteralPath $retryPath -Encoding UTF8
 Write-Host "[winget] $($before.Count) package(s) have upgrades available."
+$skipNoop = @($before.Keys | Where-Object { $noop.ContainsKey($_) -and $noop[$_] -eq $before[$_].Available })
+foreach ($id in $skipNoop) {
+    Write-Host "[winget] $id : not run again - last run its installer reported success for $($before[$id].Available) but the installed version did not change."
+}
 
 Write-Host '[winget] Upgrading winget packages silently...'
 $upgradeExit = 0
@@ -442,8 +460,11 @@ function Write-StepOutput {
 # exclusion switches to per-package upgrades of exactly what is listed.
 # Apps that must be closed first, or that update themselves, need the same.
 $special = @($before.Keys | Where-Object { $script:closeBeforeUpgrade.ContainsKey($_) -or $script:selfUpdating.ContainsKey($_) -or $script:blockedWhileInUse.ContainsKey($_) })
-if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0) {
-    $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' })
+# Per-package exit codes from the first pass, so the recheck below does not
+# run an installer a second time when it already returned success.
+$firstExit = @{}
+if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0 -or $skipNoop.Count -gt 0) {
+    $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' -and $skipNoop -notcontains $_ })
     for ($i = 0; $i -lt $ids.Count; $i++) {
         $id = $ids[$i]
         $started = Get-Date
@@ -451,6 +472,7 @@ if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:vers
         $attempt = Invoke-WingetUpgrade -Id $id
         Write-StepOutput $attempt.Output
         Write-StepOutput ("[winget] ({0}/{1}) {2} finished in {3:N0}s (exit {4})." -f ($i + 1), $ids.Count, $id, ((Get-Date) - $started).TotalSeconds, $attempt.ExitCode)
+        if (-not $attempt.PSObject.Properties['InUse']) { $firstExit[$id] = $attempt.ExitCode }
         if ($attempt.ExitCode -ne 0) { $upgradeExit = $attempt.ExitCode }
         if ($id -eq $script:wingetItself -and $attempt.ExitCode -eq 0) { $wingetReplaced = $true }
     }
@@ -495,6 +517,17 @@ $successButPending = @()
 foreach ($id in $stuck) {
     if ($script:selfUpdating.ContainsKey($id)) {
         Add-ManualUpdate -Id $id -Reason 'updates itself, not through winget' -Fix $script:selfUpdating[$id]
+        continue
+    }
+    if ($skipNoop -contains $id) {
+        $successButPending += $id
+        continue
+    }
+    # The first pass already ran this installer and it returned success;
+    # running it again only repeats the same result (G HUB: 183s, 2026-11-03).
+    if ($firstExit.ContainsKey($id) -and $firstExit[$id] -eq 0 -and -not $script:selfUpdating.ContainsKey($id)) {
+        Write-Host "[winget]   $id : installer returned success; checking the installed version below."
+        $successButPending += $id
         continue
     }
     $attempt = Invoke-WingetUpgrade -Id $id
@@ -654,11 +687,22 @@ if ($RetryFailed) { foreach ($key in @($remaining.Keys)) { if ($retryIds -notcon
 # version: the app updates itself after launch or reports its version in a
 # form winget can't match (Logitech G HUB, ChatGPT; 2026-10-24 to -28). Running
 # the same installer a third time next run changes nothing.
+$noopNext = [ordered]@{}
 foreach ($id in $successButPending) {
     if ($remaining.ContainsKey($id) -and -not $manual.Contains($id)) {
         Add-ManualUpdate -Id $id -Reason 'its installer reports success, but Windows still lists the old version' `
             -Fix 'Open the app once so it can finish updating itself. If winget keeps listing it, use "Ignore this app" under Review and update.'
+        $noopNext[$id] = $before[$id].Available
     }
+}
+# Selection and retry runs only see some packages; keep the others' entries.
+if ($selectionMode -or $RetryFailed) {
+    foreach ($key in $noop.Keys) { if (-not $before.ContainsKey($key) -and -not $noopNext.Contains($key)) { $noopNext[$key] = $noop[$key] } }
+}
+if ($noopNext.Count -gt 0) {
+    ConvertTo-Json -InputObject ([pscustomobject]$noopNext) | Set-Content -LiteralPath $noopPath -Encoding UTF8
+} else {
+    Remove-Item -LiteralPath $noopPath -ErrorAction SilentlyContinue
 }
 # Apps winget can't update here are reported, not failed, and are kept out of
 # the retry list: retrying them changes nothing.

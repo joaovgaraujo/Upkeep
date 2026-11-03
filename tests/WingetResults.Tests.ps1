@@ -2,7 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1", "$repoRoot\steps\InUse.ps1" $case
@@ -92,6 +92,10 @@ if ('SCENARIO' -eq 'ignored') {
     New-Item "$env:LOCALAPPDATA\Upkeep" -ItemType Directory -Force | Out-Null
     Set-Content "$env:LOCALAPPDATA\Upkeep\winget-ignore.json" '["Fixture.Other"]'
 }
+if ('SCENARIO' -eq 'noop-known') {
+    New-Item "$env:LOCALAPPDATA\Upkeep\Reports" -ItemType Directory -Force | Out-Null
+    Set-Content "$env:LOCALAPPDATA\Upkeep\Reports\winget-noop-installs.json" '{"Fixture.App":"2"}'
+}
 if ('SCENARIO' -eq 'retry') {
     New-Item "$env:LOCALAPPDATA\Upkeep\Reports" -ItemType Directory -Force | Out-Null
     Set-Content "$env:LOCALAPPDATA\Upkeep\Reports\winget-failed.json" '["Fixture.App"]'
@@ -106,7 +110,7 @@ exit $LASTEXITCODE
         $code = $LASTEXITCODE
         $manualFile = "$case\Upkeep\Reports\manual-updates-winget.json"
         $failedFile = "$case\Upkeep\Reports\winget-failed.json"
-        [pscustomobject]@{ Code=$code; Output=(Get-Content "$case\output.txt" -Raw); Calls=(Get-Content "$case\calls.txt" -Raw)
+        [pscustomobject]@{ Path="$case\x"; Code=$code; Output=(Get-Content "$case\output.txt" -Raw); Calls=(Get-Content "$case\calls.txt" -Raw)
             Manual=$(if (Test-Path $manualFile) { @(Get-Content $manualFile -Raw | ConvertFrom-Json) } else { @() })
             Failed=$(if (Test-Path $failedFile) { @(Get-Content $failedFile -Raw | ConvertFrom-Json) } else { @() }) }
     }
@@ -278,6 +282,14 @@ Describe 'Apps winget cannot update here are reported, not failed' {
         $r.Manual[0].Id | Should -Be 'Fixture.App'
         $r.Manual[0].Reason | Should -Match 'reports success'
         $r.Output | Should -Not -Match '\[error\]'
+        (Get-Content "$(Split-Path $r.Path)\Upkeep\Reports\winget-noop-installs.json" -Raw | ConvertFrom-Json).'Fixture.App' | Should -Be '2'
+    }
+    It 'does not run an installer again that did nothing for the same version last run' {
+        $r = Invoke-FakeWinget noop-known
+        $r.Code | Should -Be 3
+        $r.Calls | Should -Not -Match 'upgrade --id Fixture.App|--all'
+        $r.Manual[0].Id | Should -Be 'Fixture.App'
+        $r.Output | Should -Match 'not run again'
     }
     It 'keeps genuine installer failures as errors' {
         $r = Invoke-FakeWinget pending

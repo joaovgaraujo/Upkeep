@@ -97,6 +97,13 @@ vale entender:
   Windows continua mostrando a versão antiga, e apps da Loja que estão
   abertos (`0x80073D02`), vão para "Needs a manual update" em vez de deixar a
   linha vermelha.
+- **As atualizações da Loja são conferidas pela versão instalada (1.8.5).**
+  A etapa da Loja espera todos os apps da fila juntos, por até 10 minutos, e
+  para antes se nada mudar por 3 minutos. Um app só conta como atualizado se
+  a versão instalada mudou; os outros aparecem como abertos, cancelados pela
+  própria Loja ou ainda na fila. Um instalador do winget que informou sucesso
+  sem mudar a versão (Logitech G HUB) não roda de novo até o winget oferecer
+  uma versão mais nova.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

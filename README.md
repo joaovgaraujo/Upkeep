@@ -104,6 +104,13 @@ needs it. That has consequences worth understanding:
   installer reports success while Windows keeps listing the old version, and
   Store apps that are open (`0x80073D02`), go under "Needs a manual update"
   instead of turning their row red.
+- **Store updates are checked against the installed version (1.8.5).** The
+  Store step waits for all queued apps together, for up to 10 minutes, and
+  stops early once nothing has moved for 3 minutes. An app counts as updated
+  only if its installed version changed; the others are listed as open,
+  cancelled by the Store, or still queued. A winget installer that reported
+  success without changing the version (Logitech G HUB) is not run again
+  until winget offers a newer version.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

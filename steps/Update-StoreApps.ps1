@@ -21,8 +21,15 @@
 
 [CmdletBinding()]
 param(
-    # Per-app ceiling; a stuck download shouldn't wedge the whole run.
+    # Ceiling for one WinRT call (the search, or queueing one package).
     [int]$PerAppTimeoutSec = 300,
+
+    # How long to wait for the queued updates, all of them together.
+    [int]$WaitMin = 10,
+
+    # Stop waiting once no queued update has changed state for this long:
+    # items parked at "Pending 0%" behind an open app do not move on their own.
+    [int]$IdleStopSec = 180,
 
     # Overall ceiling for the whole step.
     [int]$TotalTimeoutMin = 25
@@ -92,81 +99,116 @@ function Await-WinRT {
 
 $itemType = [Windows.ApplicationModel.Store.Preview.InstallControl.AppInstallItem]
 
-# Waits for one AppInstallItem to finish, reporting progress. Returns
-# 'updated', 'failed', 'skipped' or 'running'.
-function Wait-ForInstallItem {
-    param($Item, [string]$Label)
+# Installed version per package family, so "updated" means the version moved.
+# The Store's own status is not enough: on 2026-11-03 eight apps read
+# "completed" while five of them (WhatsApp, the Store itself, GamingApp,
+# RawImageExtension, WinAppRuntime) stayed on the old version, and the next
+# run offered the same updates again.
+function Get-InstalledVersions {
+    $map = @{}
+    foreach ($p in @(Get-AppxPackage -ErrorAction SilentlyContinue)) {
+        $v = "$($p.Version)"
+        if (-not $map.ContainsKey($p.PackageFamilyName) -or [version]$v -gt [version]$map[$p.PackageFamilyName]) {
+            $map[$p.PackageFamilyName] = $v
+        }
+    }
+    $map
+}
 
-    Write-Host "[store] Updating $Label..."
-    $appDeadline = (Get-Date).AddSeconds($PerAppTimeoutSec)
-    $lastPct = -1
+# Names the processes running from a package family's install folder, or ''.
+# The Store holds an update back while its app is open (WhatsApp sat at
+# "Paused", and the rest of the queue at "Pending 0%" behind it).
+function Get-RunningFromPackage {
+    param([string]$FamilyName)
+    $name = ($FamilyName -split '_')[0]
+    $hits = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -and $_.Path -like "*\WindowsApps\$($name)_*" })
+    (@($hits | Select-Object -ExpandProperty ProcessName -Unique) | ForEach-Object { "$_.exe" }) -join ', '
+}
+
+# Waits for ALL queued items at once. The Store works through its queue on
+# its own, but the old loop waited up to $PerAppTimeoutSec for each item in
+# turn, so five stuck items cost 25 minutes (2026-10-28) and the Store lane
+# became the slowest part of the run. Stops when every item is done, when
+# nothing has changed for $IdleStopSec, or after $WaitMin minutes.
+# Returns PackageFamilyName -> 'done', 'failed', 'skipped', 'inuse', 'canceled' or 'waiting'.
+function Wait-ForInstallItems {
+    param([object[]]$Items)
+
+    $state = [ordered]@{}
+    $last = @{}
+    foreach ($i in $Items) {
+        if ($state.Contains($i.PackageFamilyName)) { continue }
+        $state[$i.PackageFamilyName] = 'waiting'
+        $last[$i.PackageFamilyName] = ''
+    }
+    $waitUntil = (Get-Date).AddMinutes($WaitMin)
+    if ($waitUntil -gt $deadline) { $waitUntil = $deadline }
+    $lastChange = Get-Date
 
     while ($true) {
-        $st = $Item.GetCurrentStatus()
-
-        if ($st.InstallState -eq 'Completed' -or $st.PercentComplete -eq 100) {
-            Write-Host "[store]   $($Label): completed."
-            return 'updated'
-        }
-        if ($st.InstallState -in @('Error', 'Canceled')) {
-            $errText = "$($st.ErrorCode)"
-            if ($errText -match '0x80073CFB') {
-                # Same package identity installed through another channel
-                # (winget/MSI - e.g. WSL) - the Store can't overlay it.
-                # Not a failure; that install updates via its own manager.
-                Write-Host "[store]   $($Label): managed outside the Store (winget/MSI) - skipped."
-                return 'skipped'
+        $open = 0
+        foreach ($i in $Items) {
+            $pfn = $i.PackageFamilyName
+            if ($state[$pfn] -ne 'waiting') { continue }
+            try { $st = $i.GetCurrentStatus() } catch { continue }
+            $now = "$($st.InstallState) $($st.PercentComplete)%"
+            if ($now -ne $last[$pfn]) {
+                Write-Host "[store]   $($pfn): $now"
+                $last[$pfn] = $now
+                $lastChange = Get-Date
             }
-            if ($errText -match '0x80073D02') {
-                # "Resources it modifies are currently in use": the app is
-                # open (the Codex app, 2026-10-24 and -26). Closing it for the
-                # user is not ours to do; list it instead of failing the step.
-                Write-Host "[store]   $($Label): the app is open, so the Store cannot replace it - listed at the end."
-                $script:inUse += $Label
-                return 'inuse'
+            if ("$($st.InstallState)" -eq 'Completed') { $state[$pfn] = 'done'; continue }
+            if ("$($st.InstallState)" -in @('Error', 'Canceled')) {
+                $errText = "$($st.ErrorCode)"
+                if ("$($st.InstallState)" -eq 'Canceled') {
+                    # The Store aborts an item itself (E_ABORT) when it
+                    # re-queues or supersedes it; Photos did this at "100%",
+                    # which the old check counted as installed. Not ours to
+                    # fail; the version check below says whether it landed.
+                    $state[$pfn] = 'canceled'
+                } elseif ($errText -match '0x80073CFB') {
+                    # Same package identity installed through another channel
+                    # (winget/MSI - e.g. WSL) - the Store can't overlay it.
+                    Write-Host "[store]   $($pfn): managed outside the Store (winget/MSI) - skipped."
+                    $state[$pfn] = 'skipped'
+                } elseif ($errText -match '0x80073D02') {
+                    # "Resources it modifies are currently in use": the app is open.
+                    $state[$pfn] = 'inuse'
+                } else {
+                    Write-Host "[store]   $($pfn): failed ($($st.InstallState) $errText)."
+                    $state[$pfn] = 'failed'
+                }
+                continue
             }
-            Write-Host "[store]   $($Label): failed ($($st.InstallState) $errText)."
-            return 'failed'
+            $open++
         }
-        if ((Get-Date) -gt $appDeadline) {
-            Write-Host "[store]   $($Label): still installing after ${PerAppTimeoutSec}s - leaving it running in background."
-            return 'running'
+        if ($open -eq 0) { break }
+        if ((Get-Date) -gt $waitUntil) {
+            Write-Host "[store] Stopped waiting after $WaitMin min; $open app(s) stay queued in the Store."
+            break
         }
-
-        if ($st.PercentComplete -ne $lastPct) {
-            Write-Host "[store]   $($Label): $($st.PercentComplete)%"
-            $lastPct = $st.PercentComplete
+        if (((Get-Date) - $lastChange).TotalSeconds -gt $IdleStopSec) {
+            Write-Host "[store] No progress for $IdleStopSec s; $open app(s) stay queued in the Store."
+            break
         }
         Start-Sleep -Seconds 3
     }
+    $state
 }
 
+$versionsBefore = Get-InstalledVersions
+$queued = @()
+
 # --- Path 2: ask the Store for everything that has an update ---------------
-# $searchWorked means "the bulk search returned a list", and is set ONLY
-# after the whole list has been walked. Setting it as soon as the call
-# returned meant a throw partway through the loop printed "falling back to a
-# per-package check" while the fallback below was skipped, so the remaining
-# apps were never checked by either path.
+# $searchWorked is set only after the list came back, so a throw still runs
+# the per-package fallback below.
 $searchWorked = $false
 try {
     $listType = [System.Collections.Generic.IReadOnlyList[Windows.ApplicationModel.Store.Preview.InstallControl.AppInstallItem]]
     $pending = Await-WinRT $mgr.SearchForAllUpdatesAsync() $listType
-
-    $count = @($pending).Count
-    Write-Host "[store] Store reports $count app(s) with updates available."
-    foreach ($item in $pending) {
-        if ((Get-Date) -gt $deadline) {
-            Write-Host "[store] Total time budget of $TotalTimeoutMin minutes exhausted - remaining apps update in background."
-            break
-        }
-        switch (Wait-ForInstallItem -Item $item -Label $item.PackageFamilyName) {
-            'updated' { $updated++ }
-            'failed'  { $failed++ }
-            'skipped' { $notServiced++ }
-            'running' { $stillRunning++ }
-            'inuse'   { }
-        }
-    }
+    $queued = @($pending)
+    Write-Host "[store] Store reports $($queued.Count) app(s) with updates available."
     $searchWorked = $true
 }
 catch {
@@ -192,19 +234,11 @@ if (-not $searchWorked) {
             Write-Host "[store] Total time budget of $TotalTimeoutMin minutes exhausted - remaining apps update in background."
             break
         }
-
         try {
             $op = $mgr.UpdateAppByPackageFamilyNameAsync($pkg.PackageFamilyName)
             $item = Await-WinRT $op $itemType
             if ($null -eq $item) { $noUpdate++; continue }
-
-            switch (Wait-ForInstallItem -Item $item -Label $pkg.Name) {
-                'updated' { $updated++ }
-                'failed'  { $failed++ }
-                'skipped' { $notServiced++ }
-                'running' { $stillRunning++ }
-                'inuse'   { }
-            }
+            $queued += $item
         }
         catch {
             # 0x803FB112 and friends mean "this package isn't serviced by the
@@ -218,9 +252,39 @@ if (-not $searchWorked) {
     }
 }
 
+if ($queued.Count -gt 0) {
+    Write-Host "[store] Waiting for $($queued.Count) Store update(s) together (up to $WaitMin min)..."
+    $result = Wait-ForInstallItems -Items $queued
+    # A moment for the Store to register the last finished packages.
+    Start-Sleep -Seconds 5
+    $versionsAfter = Get-InstalledVersions
+    foreach ($pfn in @($result.Keys)) {
+        $was = $versionsBefore[$pfn]; $now = $versionsAfter[$pfn]
+        if ($now -and $was -ne $now) {
+            Write-Host "[store]   $($pfn): updated $was -> $now."
+            $updated++
+            continue
+        }
+        if ($result[$pfn] -eq 'failed') { $failed++; continue }
+        if ($result[$pfn] -eq 'skipped') { $notServiced++; continue }
+        $running = Get-RunningFromPackage -FamilyName $pfn
+        if ($running -or $result[$pfn] -eq 'inuse') {
+            $who = if ($running) { " ($running)" } else { '' }
+            Write-Host "[store]   $($pfn): the app is open$who, so the Store cannot replace it - listed at the end."
+            $script:inUse += $pfn
+        } elseif ($result[$pfn] -eq 'canceled') {
+            Write-Host "[store]   $($pfn): the Store canceled this update itself, version unchanged - it retries on its own."
+            $stillRunning++
+        } else {
+            Write-Host "[store]   $($pfn): still queued in the Store, version unchanged - it finishes in the background or after a restart."
+            $stillRunning++
+        }
+    }
+}
+
 # --- Summary ---------------------------------------------------------------
 $parts = @("updated: $updated", "failed: $failed", "not serviced by the Store: $notServiced")
-if ($stillRunning -gt 0) { $parts += "still downloading in background: $stillRunning" }
+if ($stillRunning -gt 0) { $parts += "still queued in the Store: $stillRunning" }
 if ($script:inUse.Count -gt 0) { $parts += "open, listed for a manual update: $($script:inUse.Count)" }
 if (-not $searchWorked) { $parts += "already current: $noUpdate" }
 Write-Host "[store] Done. $($parts -join ', ')."
@@ -230,7 +294,7 @@ if ($errorCodes.Count -gt 0) {
         ForEach-Object { "$($_.Key) x$($_.Value)" }) -join ', '
     Write-Host "[store] Non-fatal API results seen: $summary"
 }
-if ($updated -eq 0 -and $failed -eq 0 -and $stillRunning -eq 0) {
+if ($updated -eq 0 -and $failed -eq 0 -and $stillRunning -eq 0 -and $script:inUse.Count -eq 0) {
     Write-Host '[store] No Store apps needed updating this run.'
 }
 
@@ -239,7 +303,7 @@ if ($script:inUse.Count -gt 0) {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     ConvertTo-Json -Depth 3 -InputObject @($script:inUse | ForEach-Object {
             [pscustomobject]@{ Source = 'store'; Id = $_; Name = ($_ -replace '_[a-z0-9]{13}$', '')
-                Reason = 'the app was open, so the Store could not replace its files (0x80073D02)'
+                Reason = 'the app was open, so the Store could not replace its files'
                 Fix = 'Close the app; the Store finishes the update in the background, or run Upkeep again.' }
         }) | Set-Content -LiteralPath (Join-Path $dir 'manual-updates-store.json') -Encoding UTF8
 }
