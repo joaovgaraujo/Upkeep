@@ -19,9 +19,11 @@ $skipJDownloader = if ($env:DASHBOARD_SKIP_OTHER_APPS -eq '1') { '1' } else { $e
 $specs = @(
     @{ Name='STORE'; Tag='store'; Script='Update-StoreApps.ps1'; Skip=$env:DASHBOARD_SKIP_STORE },
     @{ Name='JD'; Tag='jdownloader'; Script='Update-JDownloader.ps1'; Skip=$skipJDownloader },
-    @{ Name='STEAM'; Tag='steam'; Script='Update-SteamGames.ps1'; Skip=$env:DASHBOARD_SKIP_STEAM }
+    @{ Name='STEAM'; Tag='steam'; Script='Update-SteamGames.ps1'; Skip=$env:DASHBOARD_SKIP_STEAM },
+    # G HUB's own updater service (steps\Update-GHub.ps1); no package manager involved.
+    @{ Name='GHUB'; Tag='ghub'; Script='Update-GHub.ps1'; Skip=$skipJDownloader }
 )
-$results = [ordered]@{ STORE='skipped'; JD='skipped'; STEAM='skipped' }
+$results = [ordered]@{ STORE='skipped'; JD='skipped'; STEAM='skipped'; GHUB='skipped' }
 if ($PidFile) {
     # The start time disambiguates a PID the OS may have recycled.
     $self = Get-Process -Id $PID

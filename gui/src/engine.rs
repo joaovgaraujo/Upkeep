@@ -117,6 +117,7 @@ pub enum AppEvent {
     UpkeepRelease(Result<Option<crate::self_update::ReleaseCheck>, String>),
     UpdateInventory(Result<Vec<crate::updates::UpdateItem>, String>),
     AiCliChannels(Result<Vec<crate::updates::AiCliTool>, String>),
+    AgentSkills(Result<Vec<crate::updates::AgentSkill>, String>),
     LogLine(String),
     CategoryStatus(Category, Status),
     Summary(SummaryData),

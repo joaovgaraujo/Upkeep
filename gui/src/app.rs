@@ -149,6 +149,8 @@ pub struct DashboardApp {
     updates_error: Option<String>,
     /// Claude Code / Codex CLI installs found by the last update check.
     ai_cli_tools: Vec<crate::updates::AiCliTool>,
+    /// Agent skills with a known source, found by the last update check.
+    agent_skills: Vec<crate::updates::AgentSkill>,
     selected_update_ids: Option<Vec<String>>,
     update_plan: Option<crate::updates::UpdatePlan>,
     run_other_apps: bool,
@@ -350,6 +352,7 @@ impl DashboardApp {
             updates_checked: false,
             updates_error: None,
             ai_cli_tools: Vec::new(),
+            agent_skills: Vec::new(),
             selected_update_ids: None,
             update_plan: None,
             run_other_apps: true,
@@ -580,6 +583,14 @@ impl DashboardApp {
                     if let Some(plan) = self.update_plan.as_mut() {
                         if plan.ai_cli.is_empty() {
                             plan.ai_cli = self.ai_cli_tools.clone();
+                        }
+                    }
+                }
+                AppEvent::AgentSkills(result) => {
+                    self.agent_skills = result.unwrap_or_default();
+                    if let Some(plan) = self.update_plan.as_mut() {
+                        if plan.skills.is_empty() {
+                            plan.skills = self.agent_skills.clone();
                         }
                     }
                 }
@@ -2030,6 +2041,14 @@ impl DashboardApp {
                 ctx.request_repaint();
             });
         }
+        {
+            let (root, tx, ctx) = (root.clone(), tx.clone(), ctx.clone());
+            std::thread::spawn(move || {
+                let result = crate::updates::agent_skills(&root);
+                let _ = tx.send(AppEvent::AgentSkills(result));
+                ctx.request_repaint();
+            });
+        }
         std::thread::spawn(move || {
             let result = crate::updates::inventory(&root);
             let _ = tx.send(AppEvent::UpdateInventory(result));
@@ -2234,6 +2253,9 @@ impl DashboardApp {
         if plan.ai_cli.is_empty() && !self.ai_cli_tools.is_empty() {
             plan.ai_cli = self.ai_cli_tools.clone();
         }
+        if plan.skills.is_empty() && !self.agent_skills.is_empty() {
+            plan.skills = self.agent_skills.clone();
+        }
         let pt = self.lang == Lang::PtBr;
         let mut confirm = false;
         let mut cancel = false;
@@ -2369,6 +2391,34 @@ impl DashboardApp {
                                 }
                             });
                         }
+                        if !plan.skills.is_empty() {
+                            ui.separator();
+                            ui.strong(if pt { "Skills do Claude Code" } else { "Claude Code skills" });
+                            ui.label(if pt {
+                                "Marcadas: atualizadas de onde vieram. Desmarcadas: ficam como estão. A escolha fica salva."
+                            } else {
+                                "Checked: updated from where they came from. Unchecked: kept as they are. The choice is saved."
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.small_button(if pt { "Atualizar todas" } else { "Update all" }).clicked() {
+                                    for s in &mut plan.skills { s.keep = false; }
+                                }
+                                if ui.small_button(if pt { "Manter todas" } else { "Keep all" }).clicked() {
+                                    for s in &mut plan.skills { s.keep = true; }
+                                }
+                            });
+                            for skill in &mut plan.skills {
+                                ui.push_id(("skill", skill.name.clone()), |ui| {
+                                    let mut update = !skill.keep;
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui.checkbox(&mut update, egui::RichText::new(&skill.name).strong()).changed() {
+                                            skill.keep = !update;
+                                        }
+                                        ui.label(egui::RichText::new(&skill.source).weak());
+                                    });
+                                });
+                            }
+                        }
                         if offered.iter().any(|value| *value) {
                             ui.separator();
                             ui.strong(if pt { "Serviços incluídos" } else { "Included services" });
@@ -2409,10 +2459,20 @@ impl DashboardApp {
                     }
                 }
             }
-            if !plan.ai_cli.is_empty() {
+            if !plan.skills.is_empty() {
+                let keep = plan
+                    .skills
+                    .iter()
+                    .filter(|s| s.keep)
+                    .map(|s| s.name.clone())
+                    .collect();
+                self.settings.set_agent_skill_keep(keep);
+                self.agent_skills = plan.skills.clone();
+            }
+            if !plan.ai_cli.is_empty() || !plan.skills.is_empty() {
                 if let Some(root) = &self.root {
                     if let Err(e) = settings::save_settings(root, &self.settings) {
-                        self.push_error(format!("Could not save the AI CLI choice: {e}"));
+                        self.push_error(format!("Could not save your update choices: {e}"));
                     }
                 }
                 self.ai_cli_tools = plan.ai_cli.clone();
@@ -2814,6 +2874,7 @@ impl DashboardApp {
             if !self.is_running && self.engine_exit.is_some() {
                 ui.add_space(8.0);
                 let had_summary = self.summary.is_some();
+                let mut open_nvclean = false;
                 let any_error = self.status.values().any(|s| *s == Status::Error);
                 let (title, bg, fg) = if !had_summary {
                     (
@@ -2846,6 +2907,24 @@ impl DashboardApp {
                                         ui.label(detail);
                                     }
                                 });
+                        }
+                        // steps\Check-NvidiaDriver.ps1 found a newer GPU driver.
+                        if let Some(line) = self
+                            .log_lines
+                            .iter()
+                            .rev()
+                            .find(|l| l.contains("[nvidia] Driver update available"))
+                        {
+                            ui.add_space(4.0);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(
+                                    egui::RichText::new(line.replace("[nvidia] ", ""))
+                                        .color(theme::warn_amber()),
+                                );
+                                if ui.button(t.tools_open_nvclean).clicked() {
+                                    open_nvclean = true;
+                                }
+                            });
                         }
                         if !had_summary {
                             for line in self
@@ -2897,6 +2976,9 @@ impl DashboardApp {
                             }
                         });
                     });
+                if open_nvclean {
+                    self.open_nvcleanstall();
+                }
             }
             ui.add_space(16.0);
         });
@@ -3496,29 +3578,7 @@ impl DashboardApp {
                     if let Some(root) = &self.root {
                         self.settings = settings::load_settings(root);
                     }
-                    let path = self.settings.nvclean_path.clone();
-                    if path.is_empty() || !Path::new(&path).is_file() {
-                        if let Some(root) = &self.root {
-                            let script = root.join("Get-NVCleanstall.ps1");
-                            let mut cmd = Command::new("powershell.exe");
-                            cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
-                            cmd.arg(&script);
-                            cmd.arg("-Open");
-                            #[cfg(windows)]
-                            cmd.creation_flags(engine::CREATE_NEW_CONSOLE);
-                            match cmd.spawn() {
-                                Ok(_) => self.push_log(
-                                    "[drivers] Downloading portable NVCleanstall - it opens when ready."
-                                        .to_string(),
-                                ),
-                                Err(e) => {
-                                    self.push_error(format!("Failed to start download: {e}"))
-                                }
-                            }
-                        }
-                    } else if let Err(e) = spawn_detached(Path::new(&path), &[]) {
-                        self.push_error(format!("Failed to launch NVCleanstall: {e}"));
-                    }
+                    self.open_nvcleanstall();
                 }
                 Some(Action::Winutil) => {
                     let mut cmd = Command::new("powershell.exe");
@@ -3538,6 +3598,32 @@ impl DashboardApp {
                 None => {}
             }
         });
+    }
+
+    /// Opens NVCleanstall, downloading the portable copy first when it is
+    /// not configured. Used by Tools and by the post-run driver notice.
+    fn open_nvcleanstall(&mut self) {
+        let path = self.settings.nvclean_path.clone();
+        if path.is_empty() || !Path::new(&path).is_file() {
+            if let Some(root) = &self.root {
+                let script = root.join("Get-NVCleanstall.ps1");
+                let mut cmd = Command::new("powershell.exe");
+                cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+                cmd.arg(&script);
+                cmd.arg("-Open");
+                #[cfg(windows)]
+                cmd.creation_flags(engine::CREATE_NEW_CONSOLE);
+                match cmd.spawn() {
+                    Ok(_) => self.push_log(
+                        "[drivers] Downloading portable NVCleanstall - it opens when ready."
+                            .to_string(),
+                    ),
+                    Err(e) => self.push_error(format!("Failed to start download: {e}")),
+                }
+            }
+        } else if let Err(e) = spawn_detached(Path::new(&path), &[]) {
+            self.push_error(format!("Failed to launch NVCleanstall: {e}"));
+        }
     }
 
     fn draw_install_page(&mut self, ui: &mut egui::Ui) {
@@ -5408,6 +5494,20 @@ mod tests {
                                 targets: vec!["npm".into(), "native".into(), "winget".into()],
                                 preferred: "npm".into(),
                             }],
+                            skills: vec![
+                                crate::updates::AgentSkill {
+                                    name: "setup-matt-pocock-skills".into(),
+                                    source: "GitHub mattpocock/skills".into(),
+                                    keep: false,
+                                },
+                                crate::updates::AgentSkill {
+                                    name: "rossmann-voice".into(),
+                                    source:
+                                        "git.example.org/joaovguedes/claude-skills/rossmann-voice"
+                                            .into(),
+                                    keep: true,
+                                },
+                            ],
                             ..Default::default()
                         });
                     }

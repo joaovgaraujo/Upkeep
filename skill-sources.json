@@ -1,0 +1,17 @@
+{
+  "_comment": "Where Upkeep updates agent skills from. Only skills already in ~/.claude/skills are managed. Add your own in settings.json under AgentSkillSources, or list whole repos under AgentSkillRepos. type gh: gh skill install/update (repos laid out as skills/*/SKILL.md). type git: a repository folder synced by Upkeep (path \".\" is the repo root). type graphify: refreshed by graphify's own installer.",
+  "domain-modeling": { "type": "gh", "repo": "mattpocock/skills", "skill": "domain-modeling" },
+  "grilling": { "type": "gh", "repo": "mattpocock/skills", "skill": "grilling" },
+  "prototype": { "type": "gh", "repo": "mattpocock/skills", "skill": "prototype" },
+  "research": { "type": "gh", "repo": "mattpocock/skills", "skill": "research" },
+  "setup-matt-pocock-skills": { "type": "gh", "repo": "mattpocock/skills", "skill": "setup-matt-pocock-skills" },
+  "wayfinder": { "type": "gh", "repo": "mattpocock/skills", "skill": "wayfinder" },
+  "officecli": { "type": "gh", "repo": "iOfficeAI/OfficeCLI", "skill": "officecli" },
+  "humanizer": { "type": "git", "url": "https://github.com/blader/humanizer.git", "path": "." },
+  "rossmann-voice": { "type": "gh", "repo": "realrossmanngroup/no_ai_slop_writing_rules", "skill": "rossmann-voice" },
+  "graphify": { "type": "graphify" },
+  "_upstreams": {
+    "_comment": "Published versions of skills people usually customize. Upkeep never installs these over a skill that has another source; it lists the skill when the upstream folder gets a new commit, so you can merge the change.",
+    "no-ai-slop": "realrossmanngroup/no_ai_slop_writing_rules/skills/no-ai-slop"
+  }
+}

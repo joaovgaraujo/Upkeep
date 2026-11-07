@@ -26,6 +26,40 @@ pub struct UpdatePlan {
     /// Claude Code / Codex CLI installs found before the run, with the
     /// install method the user wants each one updated through.
     pub ai_cli: Vec<AiCliTool>,
+    /// Agent skills with a known source; unchecked ones are kept as they are.
+    pub skills: Vec<AgentSkill>,
+}
+
+/// One skill as `Update-AgentSkills.ps1 -Detect` reports it.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AgentSkill {
+    pub name: String,
+    pub source: String,
+    #[serde(default)]
+    pub keep: bool,
+}
+
+/// Agent skills Upkeep can update, from settings and the shipped catalog.
+pub fn agent_skills(root: &Path) -> Result<Vec<AgentSkill>, String> {
+    let script = root.join("steps/Update-AgentSkills.ps1");
+    let text = crate::system::run_hidden(
+        "powershell.exe",
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            &script.to_string_lossy(),
+            "-Detect",
+        ],
+        Duration::from_secs(60),
+    )?;
+    let json = text.trim_start_matches('\u{feff}').trim();
+    serde_json::from_str::<Vec<AgentSkill>>(json)
+        .or_else(|_| serde_json::from_str::<AgentSkill>(json).map(|s| vec![s]))
+        .map_err(|e| format!("Could not read agent skills: {e}. {text}"))
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

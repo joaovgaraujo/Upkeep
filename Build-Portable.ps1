@@ -52,6 +52,7 @@ Copy-Item $exe $dist
 Copy-Item (Join-Path $root 'SystemUpdate_Topgrade.bat') $dist
 Copy-Item (Join-Path $root 'steps\*.ps1') (Join-Path $dist 'steps')
 Copy-Item (Join-Path $root 'apps.json') $dist
+Copy-Item (Join-Path $root 'skill-sources.json') $dist
 Copy-Item (Join-Path $root 'presets\*.json') (Join-Path $dist 'presets')
 Copy-Item (Join-Path $root 'presets\*.cfg') (Join-Path $dist 'presets')
 Copy-Item (Join-Path $root 'Install-Apps.ps1') $dist

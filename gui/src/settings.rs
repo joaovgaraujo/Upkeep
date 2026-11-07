@@ -119,6 +119,15 @@ pub fn resolve_root() -> Option<PathBuf> {
 }
 
 impl Settings {
+    /// Saves the skills Upkeep must not update under "AgentSkillKeep", which
+    /// `steps\Update-AgentSkills.ps1` reads.
+    pub fn set_agent_skill_keep(&mut self, names: Vec<String>) {
+        self.extra.insert(
+            "AgentSkillKeep".to_string(),
+            serde_json::Value::Array(names.into_iter().map(serde_json::Value::String).collect()),
+        );
+    }
+
     /// Saves the install method chosen for an AI CLI ("" keeps the current
     /// one) under "AiCliChannels", which `steps\Update-AiClis.ps1` and
     /// `steps\Update-WingetApps.ps1` read.

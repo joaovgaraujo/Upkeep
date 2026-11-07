@@ -121,6 +121,15 @@ needs it. That has consequences worth understanding:
 - **Battle.net is left to its own updater (1.8.7).** winget cannot upgrade
   it without an install location, so the winget step skips it; Battle.net
   updates itself when Upkeep starts it after the updates.
+- **Claude Code skills, G HUB and the NVIDIA driver (1.8.8).** Skills in
+  `~\.claude\skills` are updated from their source: GitHub through
+  `gh skill`, any git repo (list your own under `AgentSkillRepos`, private
+  Gitea repos use `GITEA_TOKEN`), or graphify's installer. Edited skills are
+  left alone, and each replaced copy is backed up first. Confirm updates
+  lets you keep any skill as it is. G HUB's own updater runs even when its
+  service is disabled, and the service is put back afterwards. A newer
+  NVIDIA driver is listed at the end of the run with an "Open NVCleanstall"
+  button.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

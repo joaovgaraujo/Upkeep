@@ -227,6 +227,9 @@ function Get-NameVersion {
 $script:versionGuarded = @{}
 $script:launcherUpdatesItself = @{
     'Blizzard.BattleNet' = 'Battle.net updates itself when it starts, and Upkeep starts it after the updates.'
+    # winget's installer only starts G HUB's own updater and returns; the
+    # client lane runs that updater instead (steps\Update-GHub.ps1).
+    'Logitech.GHUB' = 'G HUB updates through its own updater, which Upkeep runs in this update (G HUB row).'
 }
 $script:launcherNoted = @{}
 

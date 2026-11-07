@@ -381,6 +381,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Protect-InUsePac
 :after_choco_release
 if "%DASHBOARD_SKIP_OTHER_APPS%"=="1" set "RC=0"
 
+rem -- Agent skills (~\.claude\skills) ---------------------------------------
+rem    topgrade's gh skill step only updates skills that record their GitHub
+rem    source; steps\Update-AgentSkills.ps1 gives the rest one (gh, git or
+rem    graphify's installer) per skill-sources.json and settings.json.
+set "SKILLS_STATUS=skipped"
+if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
+set "SKILLS_STATUS=ok"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-AgentSkills.ps1" -LogFile "%LOGFILE%"
+if "!errorLevel!"=="2" (set "SKILLS_STATUS=skipped") else if "!errorLevel!"=="3" (set "SKILLS_STATUS=ok - some need attention") else if not "!errorLevel!"=="0" set "SKILLS_STATUS=error"
+)
+
 rem -- Windows Update (explicit, with a watchdog timeout) -------------------
 rem    topgrade folds Windows Update into its "system" step, which it
 rem    silently SKIPS on this machine. So we run it directly via
@@ -429,6 +440,7 @@ set "EA_STATUS=skipped"
 set "STORE_STATUS=error"
 set "JD_STATUS=error"
 set "STEAM_STATUS=error"
+set "GHUB_STATUS=error"
 set "CLIENT_WAIT_SEC=4200"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Wait-BackgroundStep.ps1" -PidFile "%CLIENT_PIDFILE%" -LogFile "%LOGFILE%" -Tag clients -TimeoutSec %CLIENT_WAIT_SEC%
 if exist "%CLIENT_RESULTS%" for /f "usebackq tokens=1,2 delims==" %%A in ("%CLIENT_RESULTS%") do set "%%A=%%B"
@@ -458,6 +470,16 @@ if "%DASHBOARD_SKIP_APPS%"=="1" (
     if !RC! equ 0 (set "TOPGRADE_STATUS=ok") else (set "TOPGRADE_STATUS=error - see log, exit !RC!")
 )
 if "%DASHBOARD_SKIP_OTHER_APPS%"=="1" set "TOPGRADE_STATUS=skipped"
+
+rem -- NVIDIA driver: check only, never install ------------------------------
+rem    Nothing else here updates the GPU driver. steps\Check-NvidiaDriver.ps1
+rem    asks NVIDIA for the newest Game Ready driver (no download) and lists a
+rem    newer one at the end; the dashboard offers NVCleanstall for it.
+set "NVIDIA_STATUS=skipped"
+if not "%DASHBOARD_SKIP_APPS%"=="1" (
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Check-NvidiaDriver.ps1" -LogFile "%LOGFILE%"
+if "!errorLevel!"=="0" set "NVIDIA_STATUS=checked"
+)
 for /f "delims=" %%I in ('powershell -NoProfile -Command "$s=Get-Date '%RUN_START%'; ((Get-Date)-$s).ToString('hh\:mm\:ss')"') do set "RUN_DURATION=%%I"
 
 rem Apps that need a manual update, with the reason and the fix. Printed
@@ -470,12 +492,15 @@ echo   Summary  (duration: %RUN_DURATION%)
 echo ----------------------------------------
 echo   winget          : %WINGET_STATUS%
 echo   AI CLIs         : %AICLI_STATUS%
+echo   Agent skills    : %SKILLS_STATUS%
 echo   topgrade        : %TOPGRADE_STATUS%
 echo   Windows Update  : %WU_STATUS%
 echo   Feature update  : %FU_STATUS%
 echo   Store           : %STORE_STATUS%
 echo   Steam games     : %STEAM_STATUS%
 echo   JDownloader     : %JD_STATUS%
+echo   G HUB           : %GHUB_STATUS%
+echo   NVIDIA driver   : %NVIDIA_STATUS%
 echo   EA app          : %EA_STATUS%
 echo ----------------------------------------
 echo   Log: %LOGFILE%

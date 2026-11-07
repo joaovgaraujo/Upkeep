@@ -116,6 +116,15 @@ vale entender:
   consegue atualizá-lo sem um local de instalação, então a etapa do winget o
   pula; o Battle.net se atualiza quando o Upkeep o abre depois das
   atualizações.
+- **Skills do Claude Code, G HUB e driver NVIDIA (1.8.8).** As skills em
+  `~\.claude\skills` são atualizadas de onde vieram: GitHub via
+  `gh skill`, qualquer repositório git (liste os seus em `AgentSkillRepos`;
+  repositórios privados no Gitea usam `GITEA_TOKEN`) ou o instalador do
+  graphify. Skills editadas ficam como estão, e cada cópia substituída
+  ganha um backup antes. Em Confirmar atualizações dá para manter qualquer
+  skill como está. O atualizador do G HUB roda mesmo com o serviço
+  desativado, que volta ao estado anterior depois. Um driver NVIDIA mais
+  novo aparece no fim da execução com o botão "Abrir NVCleanstall".
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

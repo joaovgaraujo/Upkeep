@@ -2,7 +2,7 @@
 ; Build with Build-Installer.ps1 (or: ISCC.exe installer\Upkeep.iss)
 
 #define MyAppName "Upkeep"
-#define MyAppVersion "1.8.7"
+#define MyAppVersion "1.8.8"
 #define MyAppExeName "Upkeep.exe"
 #define MyOutputBase "Upkeep-Setup"
 
@@ -57,6 +57,7 @@ Source: "..\gui\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignore
 Source: "..\SystemUpdate_Topgrade.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\steps\*.ps1"; DestDir: "{app}\steps"; Flags: ignoreversion
 Source: "..\apps.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\skill-sources.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\presets\*.json"; DestDir: "{app}\presets"; Flags: ignoreversion
 Source: "..\presets\*.cfg"; DestDir: "{app}\presets"; Flags: ignoreversion
 Source: "..\Install-Apps.ps1"; DestDir: "{app}"; Flags: ignoreversion
