@@ -2,7 +2,7 @@
 ; Build with Build-Installer.ps1 (or: ISCC.exe installer\Upkeep.iss)
 
 #define MyAppName "Upkeep"
-#define MyAppVersion "1.8.9"
+#define MyAppVersion "1.9.0"
 #define MyAppExeName "Upkeep.exe"
 #define MyOutputBase "Upkeep-Setup"
 

@@ -59,6 +59,44 @@ function Get-DeelevatedUserSid {
     throw 'No desktop session for this account. Sign in to Windows with this account (at the PC or over Remote Desktop) and run Upkeep again; do not use another administrator account for user-app updates.'
 }
 
+# Does Windows PowerShell start for the normal user? On the test laptop (2026-11-07)
+# a dead NFS mount (a network drive whose server was down) sat in the user's logon.
+# Windows PowerShell checks every drive at startup, so each normal-user step
+# hung for minutes before its command began (16 and 7 minutes in one run),
+# while admin processes, which don't see that mount, were unaffected. One
+# 20-second probe per 10 minutes turns that into a quick, explained skip.
+function Test-UserPowerShellStarts {
+    param([string]$UserSid, [int]$TimeoutSec = 20)
+    $cache = Join-Path $env:TEMP 'Upkeep_userps_probe.txt'
+    if (Test-Path -LiteralPath $cache) {
+        $item = Get-Item -LiteralPath $cache
+        if (((Get-Date) - $item.LastWriteTime).TotalMinutes -lt 10) {
+            return ((Get-Content -LiteralPath $cache -TotalCount 1) -eq 'ok')
+        }
+    }
+    $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $mark = Join-Path $env:TEMP "Upkeep_userps_$tag.txt"
+    $name = "Upkeep_Probe_$tag"
+    $ok = $false
+    try {
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -Command `"Set-Content -LiteralPath '$($mark.Replace("'", "''"))' -Value ok`""
+        $principal = New-ScheduledTaskPrincipal -UserId $UserSid -LogonType Interactive -RunLevel Limited
+        Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Force -ErrorAction Stop | Out-Null
+        Start-ScheduledTask -TaskName $name -ErrorAction Stop
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $mark)) { Start-Sleep -Milliseconds 250 }
+        $ok = Test-Path -LiteralPath $mark
+    } catch { $ok = $true }  # The probe itself failed to run: don't block on it.
+    finally {
+        Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $mark -ErrorAction SilentlyContinue
+    }
+    Set-Content -LiteralPath $cache -Value $(if ($ok) { 'ok' } else { 'slow' }) -Encoding ASCII -ErrorAction SilentlyContinue
+    $ok
+}
+
 function Invoke-Deelevated {
     <#
     .PARAMETER Command
@@ -89,6 +127,9 @@ function Invoke-Deelevated {
 
     try {
         $userSid = Get-DeelevatedUserSid
+        if (-not (Test-UserPowerShellStarts -UserSid $userSid)) {
+            return [pscustomobject]@{ Status = 'Unavailable'; ExitCode = 1; Output = "Could not run as normal user: Windows PowerShell does not start for your normal Windows user within 20 seconds. A network drive that is not responding does this (an NFS or mapped drive whose server is down). Normal-user updates were skipped this run; reconnect or disconnect that drive." }
+        }
         New-Item -ItemType Directory -Path $work -Force -ErrorAction Stop | Out-Null
         $outLiteral = $outFile.Replace("'", "''")
         $doneLiteral = $doneFile.Replace("'", "''")

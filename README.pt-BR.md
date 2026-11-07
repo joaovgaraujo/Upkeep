@@ -131,6 +131,12 @@ vale entender:
   demais, e os atualizadores de linguagens e ferramentas do topgrade rodam
   durante o winget. Iniciado por SSH, o motor roda na sessão de desktop
   conectada (o winget não abre numa sessão SSH) e devolve a saída.
+- **Downloads antecipados (1.9.0).** Todos os pacotes pendentes do winget
+  baixam de uma vez, quatro por vez, no cache do próprio winget, e cada um
+  instala assim que o download termina. Se o Windows PowerShell não abrir
+  para o seu usuário normal (um drive de rede travado faz isso), as
+  atualizações como usuário normal são puladas após uma checagem de 20
+  segundos, em vez de travar a execução.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

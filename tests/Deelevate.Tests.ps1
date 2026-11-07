@@ -16,6 +16,7 @@ Describe 'Normal-user installer retries' {
         $env:TEMP = Join-Path $TestDrive "user's temp"
         New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
         Mock Get-DeelevatedUserSid { 'S-1-5-21-123' }
+        Mock Test-UserPowerShellStarts { $true }
         Mock New-ScheduledTaskAction {
             $script:runner = [regex]::Match($Argument, '-File "([^"]+)"').Groups[1].Value
             $script:fixtureAction
@@ -52,6 +53,13 @@ Describe 'Normal-user installer retries' {
         $r.Status | Should -Be Unavailable
         $r.ExitCode | Should -Be 1
         $r.Output | Should -Match 'invalid exit code'
+    }
+    It 'skips quickly, without launching, when PowerShell does not start for the normal user' {
+        Mock Test-UserPowerShellStarts { $false }
+        $r = Invoke-Deelevated -Command 'winget upgrade --id Fixture.App'
+        $r.Status | Should -Be 'Unavailable'
+        $r.Output | Should -Match 'network drive that is not responding'
+        Should -Invoke Register-ScheduledTask -Times 0
     }
     It 'reports another-account or missing desktop session before launching' {
         Mock Get-DeelevatedUserSid { throw 'No desktop session for this account' }

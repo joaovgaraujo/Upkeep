@@ -135,6 +135,11 @@ needs it. That has consequences worth understanding:
   rest, and topgrade's language and tool updaters run during winget. Started
   over SSH, the engine runs itself in the signed-in desktop session (winget
   doesn't start in an SSH session) and streams the output back.
+- **Downloads ahead (1.9.0).** Every pending winget package downloads at once,
+  four at a time, into winget's own cache, and each installs as its download
+  finishes. If Windows PowerShell can't start for your normal user (a dead
+  network drive does this), normal-user updates are skipped after a
+  20-second check instead of stalling the run.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

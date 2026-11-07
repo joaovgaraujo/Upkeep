@@ -501,16 +501,25 @@ function Get-InstallerTypes {
 # Starts lane two: one runspace upgrading $Ids in order. Results are read
 # with Receive-LaneTwo while lane one keeps going.
 function Start-LaneTwo {
-    param([string[]]$Ids)
+    param([string[]]$Ids, [string]$ReadyDir)
     $ps = [powershell]::Create()
-    [void]$ps.AddScript("param(`$Ids)`n" + (Get-WingetPrelude) + {
-            foreach ($id in $Ids) {
+    [void]$ps.AddScript("param(`$Ids, `$ReadyDir)`n" + (Get-WingetPrelude) + {
+            $left = New-Object System.Collections.ArrayList(, [string[]]$Ids)
+            while ($left.Count) {
+                # Next package whose download finished (all of them when not downloading ahead).
+                $id = $null; $deadline = (Get-Date).AddSeconds(900)
+                while (-not $id) {
+                    foreach ($c in @($left)) { if (-not $ReadyDir -or (Test-Path -LiteralPath (Join-Path $ReadyDir "$c.ready"))) { $id = $c; break } }
+                    if (-not $id -and (Get-Date) -gt $deadline) { $id = $left[0] }
+                    if (-not $id) { Start-Sleep -Milliseconds 500 }
+                }
+                [void]$left.Remove($id)
                 $started = Get-Date
                 $out = winget upgrade --id $id --exact --include-unknown --silent --disable-interactivity `
                     --accept-source-agreements --accept-package-agreements 2>&1 | Out-String
                 [pscustomobject]@{ Id = $id; ExitCode = $LASTEXITCODE; Output = $out; Seconds = ((Get-Date) - $started).TotalSeconds }
             }
-        }.ToString()).AddArgument($Ids)
+        }.ToString()).AddArgument($Ids).AddArgument($ReadyDir)
     $output = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
     $inbox = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
     $inbox.Complete()
@@ -528,6 +537,89 @@ function Receive-LaneTwo {
 function Test-InstallerBusy {
     param($Attempt)
     $Attempt.ExitCode -in @(1618, -1978335233) -or "$($Attempt.Output)" -match '(?i)another install(ation)? is (already )?in progress'
+}
+
+# --- Download ahead, install as downloads finish -------------------------------
+# For the big packages the download is most of the time (CUDA 224 s, Ollama
+# 106-126 s), and each one used to start only after the previous install had
+# finished. winget reuses an installer it finds in its own cache: a file named
+# after the installer's SHA-256 in %TEMP%\WinGet\<Id>.<Version>\ ("Existing
+# installer file hash matches. Will use existing installer", verified with
+# winget 1.29 on 2026-11-07). So every pending package is downloaded at once
+# (four at a time) with `winget download`, placed there, and the lanes install
+# each package as its download finishes. A failed or slow download only means
+# winget downloads that package itself; a different installer than the one
+# downloaded has a different hash and is downloaded as usual.
+# UPKEEP_NO_PREFETCH=1 turns this off.
+$script:prefetch = $null
+function Start-Prefetch {
+    param([string[]]$Ids)
+    if (-not $Ids.Count -or $env:UPKEEP_NO_PREFETCH -eq '1' -or $env:UPKEEP_WINGET_SERIAL -eq '1') { return }
+    $root = Join-Path $env:TEMP ('Upkeep_prefetch_' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $pool = [runspacefactory]::CreateRunspacePool(1, 4)
+    $pool.Open()
+    $prelude = Get-WingetPrelude
+    $jobs = foreach ($id in $Ids) {
+        $ps = [powershell]::Create()
+        $ps.RunspacePool = $pool
+        [void]$ps.AddScript("param(`$Id, `$Root, `$Cache)`n" + $prelude + {
+                $started = Get-Date
+                $dir = Join-Path $Root $Id
+                $ok = $false
+                try {
+                    $null = winget download --id $Id --exact -d $dir --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1 | Out-String
+                    $yaml = Get-ChildItem -LiteralPath $dir -Filter *.yaml -ErrorAction SilentlyContinue | Select-Object -First 1
+                    $file = Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ne '.yaml' } | Select-Object -First 1
+                    if ($yaml -and $file) {
+                        $text = Get-Content -LiteralPath $yaml.FullName -Raw
+                        $sha = [regex]::Match($text, '(?m)^[\s-]*InstallerSha256:\s*([0-9A-Fa-f]{64})').Groups[1].Value.ToLower()
+                        $ver = [regex]::Match($text, '(?m)^\s*PackageVersion:\s*''?"?([^''"\r\n]+)').Groups[1].Value.Trim()
+                        if ($sha -and $ver) {
+                            $dest = Join-Path $Cache "$Id.$ver"
+                            New-Item -ItemType Directory -Path $dest -Force | Out-Null
+                            Move-Item -LiteralPath $file.FullName -Destination (Join-Path $dest $sha) -Force
+                            $ok = $true
+                        }
+                    }
+                } catch {}
+                # The marker tells both lanes this package may start.
+                Set-Content -LiteralPath (Join-Path $Root "$Id.ready") -Value $ok -Encoding ASCII
+                [pscustomobject]@{ Id = $Id; Ok = $ok; Seconds = ((Get-Date) - $started).TotalSeconds }
+            }.ToString()).AddArgument($id).AddArgument($root).AddArgument((Join-Path $env:TEMP 'WinGet'))
+        [pscustomobject]@{ Id = $id; PS = $ps; Handle = $ps.BeginInvoke() }
+    }
+    $script:prefetch = [pscustomobject]@{ Root = $root; Pool = $pool; Jobs = @($jobs); Ids = $Ids }
+    Write-Host "[winget] Downloading $($Ids.Count) package(s) ahead, 4 at a time; each installs as its download finishes."
+}
+
+# The next of $Ids whose download has finished; waits for one (up to
+# $MaxWaitSec, then takes the first anyway so winget downloads it itself).
+function Get-NextReady {
+    param([System.Collections.ArrayList]$Ids, [int]$MaxWaitSec = 900, [scriptblock]$WhileWaiting)
+    if (-not $Ids.Count) { return $null }
+    if (-not $script:prefetch) { $id = $Ids[0]; $Ids.RemoveAt(0); return $id }
+    $deadline = (Get-Date).AddSeconds($MaxWaitSec)
+    while ($true) {
+        foreach ($id in @($Ids)) {
+            if (Test-Path -LiteralPath (Join-Path $script:prefetch.Root "$id.ready")) { [void]$Ids.Remove($id); return $id }
+        }
+        if ((Get-Date) -gt $deadline) { $id = $Ids[0]; $Ids.RemoveAt(0); return $id }
+        if ($WhileWaiting) { & $WhileWaiting }
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+function Stop-Prefetch {
+    if (-not $script:prefetch) { return }
+    $ok = 0
+    foreach ($j in $script:prefetch.Jobs) {
+        try { $r = @($j.PS.EndInvoke($j.Handle))[-1]; if ($r.Ok) { $ok++ } } catch {}
+        $j.PS.Dispose()
+    }
+    $script:prefetch.Pool.Close()
+    Write-StepOutput "[winget] Downloaded ahead: $ok of $($script:prefetch.Ids.Count) package(s); the rest were downloaded by winget itself."
+    Remove-Item -LiteralPath $script:prefetch.Root -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # --- Quick topgrade steps during winget ------------------------------------
@@ -695,12 +787,22 @@ if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:vers
         }
     }
     $laneOne = @($ids | Where-Object { $laneTwo -notcontains $_ })
+    # Packages with special handling run first, in order; the rest as their downloads finish.
+    $firstOne = @($laneOne | Where-Object { $special -contains $_ -or $_ -eq 'Balena.Etcher' -or $_ -eq $script:wingetItself })
+    $readyOne = New-Object System.Collections.ArrayList
+    foreach ($x in $laneOne) { if ($firstOne -notcontains $x) { [void]$readyOne.Add($x) } }
+    if ($ids.Count -ge 2) { Start-Prefetch -Ids @($ids | Where-Object { $firstOne -notcontains $_ }) }
+    $readyDir = if ($script:prefetch) { $script:prefetch.Root } else { '' }
     $script:lane = $null
     if ($laneTwo.Count) {
         Write-StepOutput "[winget] $($laneTwo.Count) of $($ids.Count) package(s) install in a second lane, alongside the rest: their installers don't use Windows Installer."
-        $script:lane = Start-LaneTwo -Ids $laneTwo
+        $script:lane = Start-LaneTwo -Ids $laneTwo -ReadyDir $readyDir
     }
-    foreach ($id in $laneOne) {
+    $order = New-Object System.Collections.ArrayList
+    foreach ($x in $firstOne) { [void]$order.Add($x) }
+    while ($order.Count -or $readyOne.Count) {
+        if ($order.Count) { $id = $order[0]; $order.RemoveAt(0) }
+        else { $id = Get-NextReady -Ids $readyOne -WhileWaiting { if ($script:lane) { Show-LaneTwo } } }
         $script:done++
         $started = Get-Date
         Write-StepOutput "[winget] ($($script:done)/$($script:total)) $id $($before[$id].Current) -> $($before[$id].Available)..."
@@ -712,6 +814,7 @@ if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:vers
         Show-LaneTwo -Wait
         $script:lane.PS.Dispose()
     }
+    Stop-Prefetch
     # Lane-two installers that ran into an MSI from lane one: one more go, alone.
     foreach ($id in $script:busy) {
         $script:done++
