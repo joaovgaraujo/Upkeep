@@ -179,7 +179,9 @@ $reset = "`$env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePa
 function Invoke-AsUser {
     param([string]$Command)
     if (Test-Elevated) {
-        $r = Invoke-Deelevated -Command ($reset + $Command)
+        # 5 minutes, not the installer default of 15: these updates take
+        # seconds, and one that hangs held the whole run (the test laptop, 2026-11-07).
+        $r = Invoke-Deelevated -Command ($reset + $Command) -TimeoutSec 300
         if ($null -eq $r) { $r = [pscustomobject]@{ ExitCode = 1; Output = 'normal-user worker unavailable' } }
     } else {
         $out = Invoke-Expression ($reset + $Command + ' 2>&1') | Out-String
@@ -318,7 +320,20 @@ foreach ($t in $tools) {
             }
         }
     }
+    $nativeCurrent = $false
     if ((Test-Path -LiteralPath $t.Exe) -and $skipUpdate -notcontains 'native') {
+        # The own installer ships npm's releases: when npm's newest is what is
+        # installed, `update` has nothing to do. Running it anyway cost a
+        # 15-minute wait on the test laptop (2026-11-07), where it never reported back.
+        $installed = Get-ExeVersion $t.Exe
+        $newest = if ($hasNpm) { Get-NpmLatest -Package $t.Npm } else { '' }
+        if ($newest -and $installed -eq $newest) {
+            $found = $true
+            Write-Log "[ai-cli] $($t.Name) (own installer): already current ($installed)."
+            $nativeCurrent = $true
+        }
+    }
+    if ((Test-Path -LiteralPath $t.Exe) -and $skipUpdate -notcontains 'native' -and -not $nativeCurrent) {
         $found = $true
         $didSomething = $true
         $before = Get-ExeVersion $t.Exe

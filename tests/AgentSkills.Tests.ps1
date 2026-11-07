@@ -5,16 +5,19 @@ BeforeAll {
     # A source repo with one skill folder, as a local git repository.
     function New-SkillRepo {
         param([string]$Dir, [string]$Body = 'v1')
+        # CI stops on any stderr line; git's line-ending warning is one.
+        $ErrorActionPreference = 'Continue'
         New-Item "$Dir\my-skill" -ItemType Directory -Force | Out-Null
         "---`nname: my-skill`ndescription: test`n---`n$Body" | Set-Content "$Dir\my-skill\SKILL.md"
-        git -C $Dir init -q -b main 2>&1 | Out-Null
-        git -C $Dir add -A 2>&1 | Out-Null
-        git -C $Dir -c user.name=t -c user.email=t@t commit -q -m init 2>&1 | Out-Null
+        git -C $Dir -c core.autocrlf=false init -q -b main 2>&1 | Out-Null
+        git -C $Dir -c core.autocrlf=false add -A 2>&1 | Out-Null
+        git -C $Dir -c core.autocrlf=false -c user.name=t -c user.email=t@t commit -q -m init 2>&1 | Out-Null
     }
     function Update-SkillRepo {
         param([string]$Dir, [string]$Body)
+        $ErrorActionPreference = 'Continue'
         "---`nname: my-skill`ndescription: test`n---`n$Body" | Set-Content "$Dir\my-skill\SKILL.md"
-        git -C $Dir -c user.name=t -c user.email=t@t commit -q -am update 2>&1 | Out-Null
+        git -C $Dir -c core.autocrlf=false -c user.name=t -c user.email=t@t commit -q -am update 2>&1 | Out-Null
     }
     # Runs the step with -File in Windows PowerShell 5.1, as the engine does,
     # against scratch skills/settings/state folders. -AsUser: CI is elevated.

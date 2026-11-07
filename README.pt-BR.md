@@ -124,7 +124,13 @@ vale entender:
   ganha um backup antes. Em Confirmar atualizações dá para manter qualquer
   skill como está. O atualizador do G HUB roda mesmo com o serviço
   desativado, que volta ao estado anterior depois. Um driver NVIDIA mais
-  novo aparece no fim da execução com o botão "Abrir NVCleanstall".
+  novo aparece no fim da execução com o botão "Abrir NVCleanstall". (A 1.8.8
+  não foi publicada; isto sai na 1.8.9.)
+- **Execuções mais rápidas, e por SSH (1.8.9).** O winget instala os pacotes
+  cujo instalador não usa o Windows Installer numa segunda fila, junto com os
+  demais, e os atualizadores de linguagens e ferramentas do topgrade rodam
+  durante o winget. Iniciado por SSH, o motor roda na sessão de desktop
+  conectada (o winget não abre numa sessão SSH) e devolve a saída.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

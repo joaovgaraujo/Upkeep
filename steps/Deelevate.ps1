@@ -45,13 +45,18 @@ function Test-RequiresNormalUser {
 function Get-DeelevatedUserSid {
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $session = (Get-Process -Id $PID).SessionId
+    # This session first; then any session the same account is signed in to.
+    # Over SSH the engine runs in a session with no desktop, while the same
+    # account is signed in at the console; the Interactive task below starts
+    # there, so normal-user updates work remotely too (the test laptop, 2026-11-07).
+    # Another account's desktop never counts.
     $shells = @(Get-CimInstance Win32_Process -Filter "Name = 'explorer.exe'" -ErrorAction Stop |
-        Where-Object { $_.SessionId -eq $session })
+        Sort-Object { if ($_.SessionId -eq $session) { 0 } else { 1 } })
     foreach ($shell in $shells) {
         $owner = Invoke-CimMethod -InputObject $shell -MethodName GetOwnerSid -ErrorAction Stop
         if ($owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid) { return $sid }
     }
-    throw 'No desktop session for this account. Open Upkeep from your usual Windows account; do not use another administrator account for user-app updates.'
+    throw 'No desktop session for this account. Sign in to Windows with this account (at the PC or over Remote Desktop) and run Upkeep again; do not use another administrator account for user-app updates.'
 }
 
 function Invoke-Deelevated {

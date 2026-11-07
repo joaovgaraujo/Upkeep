@@ -34,6 +34,16 @@ if %errorLevel% neq 0 (
     exit /b
 )
 
+rem -- Started over SSH: run in the desktop session instead -------------------
+rem    winget (a packaged app) does not start in an SSH session ("Access is
+rem    denied"), and normal-user updates need the user's desktop. The engine
+rem    runs again there through steps\Invoke-InDesktop.ps1, which prints its
+rem    output here and returns its exit code.
+if defined SSH_CONNECTION if not "%UPKEEP_IN_DESKTOP%"=="1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-InDesktop.ps1" -BatPath "%~f0"
+    exit /b !errorLevel!
+)
+
 rem -- Single-instance guard: recover dead owners immediately ----------------
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Manage-EngineLock.ps1" -Action Acquire
 if errorlevel 1 (
@@ -294,10 +304,15 @@ rem    The usual reason is UPDATE_NOT_APPLICABLE (0x8A15002B) - the manifest's
 rem    installer doesn't match how the app is installed here (user-scope
 rem    install, or the app self-updates so winget's tracked version never
 rem    moves). That is not a broken winget and not a transient failure.
+set "EXPLICIT_LIST=%TEMP%\sysupd_explicit_ids.txt"
+del "%EXPLICIT_LIST%" 2>nul
 set "WINGET_STATUS=skipped"
 if not "%DASHBOARD_SKIP_APPS%"=="1" (
 set "WINGET_STATUS=ok"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-WingetApps.ps1" -LogFile "%LOGFILE%"
+del "%TGDIR%\topgrade-quick-args.txt" "%TGDIR%\topgrade-quick-exit.txt" 2>nul
+rem    -TopgradeConfig: topgrade's quick steps (language tools, gh, MiKTeX)
+rem    run alongside winget; the topgrade run below skips them.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-WingetApps.ps1" -LogFile "%LOGFILE%" -TopgradeConfig "%TGCONF%" -ExplicitListPath "%EXPLICIT_LIST%"
 rem 3 = everything winget can update was updated; the rest can't be updated
 rem unattended here and is listed at the end of the run - not an error.
 if "!errorLevel!"=="2" (set "WINGET_STATUS=skipped") else if "!errorLevel!"=="3" (set "WINGET_STATUS=ok - some apps need a manual update") else if not "!errorLevel!"=="0" set "WINGET_STATUS=error"
@@ -317,24 +332,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Update-AiClis.ps
 if "!errorLevel!"=="2" (set "AICLI_STATUS=not installed") else if "!errorLevel!"=="3" (set "AICLI_STATUS=ok - manual update listed above") else if "!errorLevel!"=="4" (set "AICLI_STATUS=skipped") else if not "!errorLevel!"=="0" set "AICLI_STATUS=error"
 )
 
-rem -- Find packages winget lists as needing "explicit targeting" (this is
-rem    separate from pins - it's how some publishers declare their manifest).
-rem    We'll offer to update these individually at the very end of the run.
-if not "%DASHBOARD_SKIP_APPS%"=="1" if not "%DASHBOARD_SKIP_OTHER_APPS%"=="1" (
-set "EXPLICIT_LIST=%TEMP%\sysupd_explicit_ids.txt"
-del "!EXPLICIT_LIST!" 2>nul
-powershell -NoProfile -Command ^
-  "$raw = winget upgrade --include-unknown --accept-source-agreements 2>&1 | Out-String;" ^
-  "$lines = $raw -split \"`r?`n\";" ^
-  "$start = -1; for ($i=0;$i -lt $lines.Count;$i++){ if ($lines[$i] -match 'require explicit targeting'){$start=$i+1;break} };" ^
-  "if ($start -ge 0 -and $lines[$start] -match 'Id') {" ^
-  "  $header=$lines[$start]; $idPos=$header.IndexOf('Id'); $verPos=$header.IndexOf('Version');" ^
-  "  for ($j=$start+2;$j -lt $lines.Count;$j++) {" ^
-  "    $l=$lines[$j]; if ([string]::IsNullOrWhiteSpace($l)) { break }; if ($l -match '^\d+ package'){ break };" ^
-  "    if ($l.Length -gt $verPos) { $id=$l.Substring($idPos,$verPos-$idPos).Trim(); if ($id) { $id | Out-File -FilePath '%TEMP%\sysupd_explicit_ids.txt' -Append -Encoding ascii } }" ^
-  "  }" ^
-  "}"
-)
+rem -- Packages winget lists as needing "explicit targeting" (separate from
+rem    pins - it's how some publishers declare their manifest) are offered
+rem    one by one at the very end. Update-WingetApps.ps1 writes their ids to
+rem    EXPLICIT_LIST from its own inventory; a second full `winget upgrade`
+rem    scan here used to cost 10-20 s per run.
 
 rem -- Run topgrade (with a watchdog timeout) -------------------------------
 rem    No -k: that flag adds topgrade's interactive (R)eboot/(P)oweroff/
@@ -371,10 +373,16 @@ rem %VAR% would expand before the file is read.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Protect-InUsePackages.ps1" -Action Hold
 set "TG_EXTRA="
 if exist "%TGDIR%\topgrade-extra-args.txt" set /p TG_EXTRA=<"%TGDIR%\topgrade-extra-args.txt"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-Topgrade.ps1" -ConfigPath "%TGCONF%" -LogFile "%LOGFILE%" -TimeoutMin %TOPGRADE_TIMEOUT_MIN% -ExtraArguments "!TG_EXTRA!"
+set "TG_QUICK="
+if exist "%TGDIR%\topgrade-quick-args.txt" set /p TG_QUICK=<"%TGDIR%\topgrade-quick-args.txt"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-Topgrade.ps1" -ConfigPath "%TGCONF%" -LogFile "%LOGFILE%" -TimeoutMin %TOPGRADE_TIMEOUT_MIN% -ExtraArguments "!TG_EXTRA! !TG_QUICK!"
 )
 
 if not "%DASHBOARD_SKIP_APPS%"=="1" (set "RC=!errorLevel!") else (set "RC=0")
+rem A failed quick step (run alongside winget) still shows in the topgrade row.
+set "TG_QUICK_RC=0"
+if exist "%TGDIR%\topgrade-quick-exit.txt" set /p TG_QUICK_RC=<"%TGDIR%\topgrade-quick-exit.txt"
+if "!RC!"=="0" if not "!TG_QUICK_RC!"=="0" set "RC=!TG_QUICK_RC!"
 if "%DASHBOARD_SKIP_APPS%"=="1" goto :after_choco_release
 if "%DASHBOARD_SKIP_OTHER_APPS%"=="1" goto :after_choco_release
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Protect-InUsePackages.ps1" -Action Release

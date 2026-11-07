@@ -76,7 +76,11 @@ param(
     [switch]$NoChocoFallback,
     [switch]$NoDeelevatedRetry,
     [switch]$RetryFailed,
-    [switch]$InventoryOnly
+    [switch]$InventoryOnly,
+    # topgrade config: when given, topgrade's quick steps run alongside winget.
+    [string]$TopgradeConfig,
+    # Where to write the ids winget lists as needing explicit targeting.
+    [string]$ExplicitListPath
 )
 
 $ErrorActionPreference = 'Continue'
@@ -137,6 +141,27 @@ function Get-PendingUpgrades {
     $limit = $lines.Count
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match 'require explicit targeting') { $limit = $i; break }
+    }
+    # The explicit-targeting table, saved once for the end-of-run offer, so
+    # the engine no longer runs a second full scan to find it.
+    if ($ExplicitListPath -and -not $script:explicitWritten -and -not $InventoryOnly -and -not $selectionMode -and $env:DASHBOARD_SKIP_OTHER_APPS -ne '1') {
+        $script:explicitWritten = $true
+        $explicit = @()
+        if ($limit -lt $lines.Count -and ($limit + 2) -lt $lines.Count -and $lines[$limit + 2].Trim() -match '^-{5,}$') {
+            $cols = @([regex]::Matches($lines[$limit + 1], '\S.*?(?=\s{2,}|$)'))
+            if ($cols.Count -lt 3) { $cols = @([regex]::Matches($lines[$limit + 1], '\S+')) }
+            if ($cols.Count -ge 3) {
+                for ($k = $limit + 3; $k -lt $lines.Count; $k++) {
+                    $l = $lines[$k]
+                    if ([string]::IsNullOrWhiteSpace($l) -or $l -match '^\d+ package') { break }
+                    if ($l.Length -le $cols[2].Index) { continue }
+                    $xid = $l.Substring($cols[1].Index, $cols[2].Index - $cols[1].Index).Trim()
+                    if ($xid -match '^[A-Za-z0-9][A-Za-z0-9._+\-]+$') { $explicit += $xid }
+                }
+            }
+        }
+        Remove-Item -LiteralPath $ExplicitListPath -ErrorAction SilentlyContinue
+        if ($explicit.Count) { $explicit | Set-Content -LiteralPath $ExplicitListPath -Encoding ASCII }
     }
 
     $headerIdx = -1
@@ -430,6 +455,133 @@ function Invoke-WingetUpgrade {
     [pscustomobject]@{ ExitCode = $code; Output = $out }
 }
 
+# --- Two install lanes ---------------------------------------------------------
+# Installs used to run strictly one after another, which was 70-75% of a run
+# (8 of 11 minutes on 2026-11-05). Windows Installer runs one MSI at a time,
+# but EXE/Inno/Nullsoft/portable/MSIX installers don't use it. So packages
+# whose installer is not MSI-based go to a second lane that runs alongside
+# the first. A lane-two install that still hits "another installation is in
+# progress" (an EXE that starts msiexec itself) is retried at the end.
+# UPKEEP_WINGET_SERIAL=1 turns this off.
+$script:laneTwoTypes = @('exe', 'inno', 'nullsoft', 'portable', 'msix', 'appx', 'msstore')
+
+# A runspace inherits nothing; a test's fake winget function is carried over.
+function Get-WingetPrelude {
+    $cmd = Get-Command winget -CommandType Function -ErrorAction SilentlyContinue
+    if ($cmd) { "function winget {`n$($cmd.Definition)`n}`n" } else { '' }
+}
+
+# Installer type per id, from `winget show`, several at a time. The label is
+# translated, the value is not, so this matches the value.
+function Get-InstallerTypes {
+    param([string[]]$Ids)
+    $types = @{}
+    if (-not $Ids.Count) { return $types }
+    $prelude = Get-WingetPrelude
+    $pool = [runspacefactory]::CreateRunspacePool(1, 6)
+    $pool.Open()
+    $jobs = foreach ($id in $Ids) {
+        $ps = [powershell]::Create()
+        $ps.RunspacePool = $pool
+        [void]$ps.AddScript("param(`$Id)`n" + $prelude + {
+                $out = winget show --id $Id --exact --accept-source-agreements --disable-interactivity 2>&1 | Out-String
+                $m = [regex]::Match($out, '(?im)^\s*[^:\r\n]+:\s*(msi|wix|burn|exe|inno|nullsoft|portable|msix|appx|zip|msstore)\s*$')
+                if ($m.Success) { $m.Groups[1].Value.ToLower() } else { '' }
+            }.ToString()).AddArgument($id)
+        [pscustomobject]@{ Id = $id; PS = $ps; Handle = $ps.BeginInvoke() }
+    }
+    foreach ($j in $jobs) {
+        try { $types[$j.Id] = "$(@($j.PS.EndInvoke($j.Handle))[-1])" } catch { $types[$j.Id] = '' }
+        $j.PS.Dispose()
+    }
+    $pool.Close()
+    $types
+}
+
+# Starts lane two: one runspace upgrading $Ids in order. Results are read
+# with Receive-LaneTwo while lane one keeps going.
+function Start-LaneTwo {
+    param([string[]]$Ids)
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript("param(`$Ids)`n" + (Get-WingetPrelude) + {
+            foreach ($id in $Ids) {
+                $started = Get-Date
+                $out = winget upgrade --id $id --exact --include-unknown --silent --disable-interactivity `
+                    --accept-source-agreements --accept-package-agreements 2>&1 | Out-String
+                [pscustomobject]@{ Id = $id; ExitCode = $LASTEXITCODE; Output = $out; Seconds = ((Get-Date) - $started).TotalSeconds }
+            }
+        }.ToString()).AddArgument($Ids)
+    $output = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
+    $inbox = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
+    $inbox.Complete()
+    [pscustomobject]@{ PS = $ps; Output = $output; Handle = $ps.BeginInvoke($inbox, $output); Read = 0 }
+}
+
+function Receive-LaneTwo {
+    param($Lane, [switch]$Wait)
+    if ($Wait) { try { $Lane.PS.EndInvoke($Lane.Handle) | Out-Null } catch {} }
+    $new = @()
+    while ($Lane.Read -lt $Lane.Output.Count) { $new += $Lane.Output[$Lane.Read]; $Lane.Read++ }
+    $new
+}
+
+function Test-InstallerBusy {
+    param($Attempt)
+    $Attempt.ExitCode -in @(1618, -1978335233) -or "$($Attempt.Output)" -match '(?i)another install(ation)? is (already )?in progress'
+}
+
+# --- Quick topgrade steps during winget ------------------------------------
+# topgrade's language and tool updaters don't install anything through
+# Windows Installer, so they can run while winget installs - except a tool
+# that winget is about to replace in the same run (pip while Python updates).
+# The main topgrade run later skips the steps done here.
+$script:quickSteps = [ordered]@{
+    'rustup' = '^Rustlang\.Rustup$'; 'cargo' = '^Rustlang\.Rustup$'
+    'juliaup' = '^Julialang\.'; 'julia' = '^Julialang\.'
+    'pip3' = '^Python\.Python\.'; 'pnpm' = '^(pnpm\.pnpm|OpenJS\.NodeJS.*)$'
+    'github_cli_extensions' = '^GitHub\.cli$'; 'github_cli_skills' = '^GitHub\.cli$'
+    'claude_code_plugins' = '^$'; 'miktex' = '^MiKTeX\.'; 'tailscale' = '^Tailscale\.Tailscale$'
+}
+$script:quick = $null
+function Start-QuickTopgrade {
+    param([string[]]$PendingIds)
+    if (-not $TopgradeConfig -or -not (Test-Path -LiteralPath $TopgradeConfig)) { return }
+    if ($RetryFailed -or $selectionMode -or $env:DASHBOARD_SKIP_OTHER_APPS -eq '1' -or $env:UPKEEP_WINGET_SERIAL -eq '1') { return }
+    if (-not (Get-Command topgrade -ErrorAction SilentlyContinue)) { return }
+    $steps = @($script:quickSteps.Keys | Where-Object {
+            $pattern = $script:quickSteps[$_]
+            -not @($PendingIds | Where-Object { $_ -match $pattern }).Count
+        })
+    if (-not $steps.Count) { return }
+    $wrapper = Join-Path $PSScriptRoot 'Invoke-Topgrade.ps1'
+    $out = Join-Path $env:TEMP ("Upkeep_quicktg_{0}.txt" -f [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapper`" -ConfigPath `"$TopgradeConfig`" -TimeoutMin 15 -ExtraArguments `"--only $($steps -join ' ')`""
+    try {
+        $p = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError "$out.err" -ErrorAction Stop
+        # Read the handle now: without it, .NET reports no ExitCode once the
+        # process has exited ("exit ()" on the test laptop, 2026-11-07).
+        $null = $p.Handle
+        Write-Host "[topgrade] Running $($steps -join ', ') alongside winget."
+        $script:quick = [pscustomobject]@{ Process = $p; Out = $out; Steps = $steps }
+    } catch {}
+}
+function Complete-QuickTopgrade {
+    if (-not $script:quick) { return }
+    $q = $script:quick
+    if (-not $q.Process.WaitForExit(15 * 60 * 1000)) { try { $q.Process.Kill() } catch {} }
+    $lines = @(Get-Content -LiteralPath $q.Out -ErrorAction SilentlyContinue) + @(Get-Content -LiteralPath "$($q.Out).err" -ErrorAction SilentlyContinue)
+    Write-StepOutput ($lines | Where-Object { $_ -ne $null })
+    Write-StepOutput ("[topgrade] Done alongside winget: $($q.Steps -join ', ') (exit $($q.Process.ExitCode)).")
+    # The main topgrade run skips these.
+    $tgDir = Join-Path $env:LOCALAPPDATA 'SystemUpdate'
+    New-Item -ItemType Directory -Path $tgDir -Force | Out-Null
+    "--disable $($q.Steps -join ' ')" | Set-Content -LiteralPath (Join-Path $tgDir 'topgrade-quick-args.txt') -Encoding ASCII
+    # A failed step here must still show in the topgrade row.
+    "$($q.Process.ExitCode)" | Set-Content -LiteralPath (Join-Path $tgDir 'topgrade-quick-exit.txt') -Encoding ASCII
+    Remove-Item -LiteralPath $q.Out, "$($q.Out).err" -ErrorAction SilentlyContinue
+}
+
 $reportDir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
 New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
 $retryPath = Join-Path $reportDir 'winget-failed.json'
@@ -474,6 +626,7 @@ if ($RetryFailed) {
 ConvertTo-Json -InputObject @($before.Keys) | Set-Content -LiteralPath $retryPath -Encoding UTF8
 Write-Host "[winget] $($before.Count) package(s) have upgrades available."
 $skipNoop = @($before.Keys | Where-Object { $noop.ContainsKey($_) -and $noop[$_] -eq $before[$_].Available })
+Start-QuickTopgrade -PendingIds @($before.Keys)
 foreach ($id in $skipNoop) {
     Write-Host "[winget] $id : not run again - last run its installer reported success for $($before[$id].Available) but the installed version did not change."
 }
@@ -502,19 +655,70 @@ $firstExit = @{}
 # installed. Restart the application to complete the upgrade." ChatGPT on
 # the test laptop, 2026-11-03. Windows swaps the version in when the app restarts.
 $restartPending = @{}
-if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0 -or $skipNoop.Count -gt 0 -or $script:launcherNoted.Count -gt 0) {
+if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0 -or $skipNoop.Count -gt 0 -or $script:launcherNoted.Count -gt 0 -or ($env:UPKEEP_WINGET_SERIAL -ne '1' -and $before.Count -ge 2)) {
     $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' -and $skipNoop -notcontains $_ })
-    for ($i = 0; $i -lt $ids.Count; $i++) {
-        $id = $ids[$i]
+    $script:done = 0
+    $script:total = $ids.Count
+    $script:busy = @()
+    function Complete-Attempt {
+        param([string]$Id, $Attempt, [double]$Seconds, [string]$Lane = '')
+        Write-StepOutput $Attempt.Output
+        Write-StepOutput ("[winget] ({0}/{1}) {2} finished in {3:N0}s (exit {4}){5}." -f $script:done, $script:total, $Id, $Seconds, $Attempt.ExitCode, $Lane)
+        if (-not $Attempt.PSObject.Properties['InUse']) { $script:firstExit[$Id] = $Attempt.ExitCode }
+        if ("$($Attempt.Output)" -match 'Restart the application to complete') { $script:restartPending[$Id] = $true }
+        if ($Attempt.ExitCode -ne 0) { $script:upgradeExit = $Attempt.ExitCode }
+        if ($Id -eq $script:wingetItself -and $Attempt.ExitCode -eq 0) { $script:wingetReplaced = $true }
+    }
+    function Show-LaneTwo {
+        param([switch]$Wait)
+        foreach ($r in @(Receive-LaneTwo -Lane $script:lane -Wait:$Wait)) {
+            if (Test-InstallerBusy $r) {
+                Write-StepOutput "[winget]   $($r.Id) : another installation was in progress - installing it again after the others."
+                $script:busy += $r.Id
+                continue
+            }
+            $script:done++
+            Write-StepOutput "[winget] ($($script:done)/$($script:total)) $($r.Id) $($before[$r.Id].Current) -> $($before[$r.Id].Available) (second lane)..."
+            Complete-Attempt -Id $r.Id -Attempt $r -Seconds $r.Seconds -Lane ', second lane'
+        }
+    }
+
+    # Lane two: packages whose installer does not go through Windows Installer.
+    # Apps with special handling (closed first, held while in use, updating
+    # themselves, run as the normal user, winget itself) stay in lane one.
+    $laneTwo = @()
+    if ($env:UPKEEP_WINGET_SERIAL -ne '1' -and $ids.Count -ge 2) {
+        $plain = @($ids | Where-Object { $special -notcontains $_ -and $_ -ne 'Balena.Etcher' -and $_ -ne $script:wingetItself })
+        if ($plain.Count) {
+            $types = Get-InstallerTypes -Ids $plain
+            $laneTwo = @($plain | Where-Object { $script:laneTwoTypes -contains $types[$_] })
+        }
+    }
+    $laneOne = @($ids | Where-Object { $laneTwo -notcontains $_ })
+    $script:lane = $null
+    if ($laneTwo.Count) {
+        Write-StepOutput "[winget] $($laneTwo.Count) of $($ids.Count) package(s) install in a second lane, alongside the rest: their installers don't use Windows Installer."
+        $script:lane = Start-LaneTwo -Ids $laneTwo
+    }
+    foreach ($id in $laneOne) {
+        $script:done++
         $started = Get-Date
-        Write-StepOutput "[winget] ($($i + 1)/$($ids.Count)) $id $($before[$id].Current) -> $($before[$id].Available)..."
+        Write-StepOutput "[winget] ($($script:done)/$($script:total)) $id $($before[$id].Current) -> $($before[$id].Available)..."
         $attempt = Invoke-WingetUpgrade -Id $id
-        Write-StepOutput $attempt.Output
-        Write-StepOutput ("[winget] ({0}/{1}) {2} finished in {3:N0}s (exit {4})." -f ($i + 1), $ids.Count, $id, ((Get-Date) - $started).TotalSeconds, $attempt.ExitCode)
-        if (-not $attempt.PSObject.Properties['InUse']) { $firstExit[$id] = $attempt.ExitCode }
-        if ("$($attempt.Output)" -match 'Restart the application to complete') { $restartPending[$id] = $true }
-        if ($attempt.ExitCode -ne 0) { $upgradeExit = $attempt.ExitCode }
-        if ($id -eq $script:wingetItself -and $attempt.ExitCode -eq 0) { $wingetReplaced = $true }
+        Complete-Attempt -Id $id -Attempt $attempt -Seconds ((Get-Date) - $started).TotalSeconds
+        if ($script:lane) { Show-LaneTwo }
+    }
+    if ($script:lane) {
+        Show-LaneTwo -Wait
+        $script:lane.PS.Dispose()
+    }
+    # Lane-two installers that ran into an MSI from lane one: one more go, alone.
+    foreach ($id in $script:busy) {
+        $script:done++
+        $started = Get-Date
+        Write-StepOutput "[winget] ($($script:done)/$($script:total)) $id $($before[$id].Current) -> $($before[$id].Available) (again, alone)..."
+        $attempt = Invoke-WingetUpgrade -Id $id
+        Complete-Attempt -Id $id -Attempt $attempt -Seconds ((Get-Date) - $started).TotalSeconds
     }
 } else {
     winget upgrade --all --include-unknown --silent --disable-interactivity `
@@ -523,6 +727,7 @@ if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:vers
     $upgradeExit = $LASTEXITCODE
 }
 
+Complete-QuickTopgrade
 $after = Get-PendingUpgrades
 # App Installer is winget itself. On 2026-10-06 its upgrade returned 0, yet
 # every winget query for the rest of the run still listed the old version, so

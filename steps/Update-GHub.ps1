@@ -26,7 +26,10 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$TimeoutMin = 8,
+    # 2 minutes: on this PC the service applied the build within seconds
+    # with G HUB open; on the test laptop, with G HUB closed, it did not apply in 8
+    # minutes or after a restart, and that wait held up the end of the run.
+    [int]$TimeoutMin = 2,
     [string]$DataDir = 'C:\ProgramData\LGHUB',
     [string]$ServiceName = 'LGHUBUpdaterService'
 )
@@ -75,7 +78,7 @@ try {
     if ($after -ne $before) {
         Write-Host "[ghub] Updated $before -> $after."
     } elseif ($pending -and $pending -ne $after) {
-        Write-Host "[ghub] $pending is still being applied after $TimeoutMin min; G HUB finishes it the next time its updater runs."
+        Write-Host "[ghub] $pending is downloaded but was not applied in $TimeoutMin min; G HUB applies it the next time G HUB is opened."
     } else {
         Write-Host "[ghub] Already current ($after)."
     }

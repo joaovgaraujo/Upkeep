@@ -2,7 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known','battlenet','restart-pending')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known','battlenet','restart-pending','parallel','busy')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1", "$repoRoot\steps\InUse.ps1" $case
@@ -25,8 +25,21 @@ $global:normalUpdated = $false
 $env:UPKEEP_FIXTURE_TIMEOUT = if ('SCENARIO' -eq 'nonadmin-timeout') { '1' } else { '0' }
 Remove-Item Env:UPKEEP_SELECTED_IDS -ErrorAction SilentlyContinue
 function winget {
-    Add-Content "$PSScriptRoot\calls.txt" ($args -join ' ')
+    Add-Content "$env:LOCALAPPDATA\calls.txt" ($args -join ' ')
     $global:LASTEXITCODE = 0
+    if ($args[0] -eq 'show') {
+        if ('SCENARIO' -in @('parallel','busy')) { if ($args -contains 'Fixture.Other') { 'Installer Type: exe' } else { 'Installer Type: msi' } }
+        return
+    }
+    if ($args -contains '--id' -and 'SCENARIO' -eq 'parallel') { 'Successfully installed'; return }
+    if ($args -contains '--id' -and 'SCENARIO' -eq 'busy') {
+        if ($args -contains 'Fixture.Other' -and -not (Test-Path "$env:LOCALAPPDATA\busy-once")) {
+            New-Item "$env:LOCALAPPDATA\busy-once" -ItemType File | Out-Null
+            $global:LASTEXITCODE = 1618; 'Another installation is already in progress.'; return
+        }
+        'Successfully installed'; return
+    }
+    if ('SCENARIO' -in @('parallel','busy') -and $args -notcontains '--id' -and $global:scan -ge 1) { $global:scan++; return }
     if ($args -contains '--all') {
         if ('SCENARIO' -eq 'bulk-error') { $global:LASTEXITCODE = 1 }
         return
@@ -74,7 +87,7 @@ function winget {
     if ('SCENARIO' -eq 'battlenet') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Battle.net','Blizzard.BattleNet','Unknown','2.0.0.4232'; ''; return }
     if ('SCENARIO' -eq 'git-in-use') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Git','Git.Git','2.56.0','2.56.0.3'; ''; return }
     '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Fixture','Fixture.App','1','2'
-    if ('SCENARIO' -in @('retry','selected','ignored','empty-selection','inventory')) { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Other','Fixture.Other','1','2' }
+    if ('SCENARIO' -in @('retry','selected','ignored','empty-selection','inventory','parallel','busy')) { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Other','Fixture.Other','1','2' }
     ''
 }
 try {
@@ -304,6 +317,21 @@ Describe 'Apps winget cannot update here are reported, not failed' {
         $r.Code | Should -Be 3
         $r.Manual[0].Reason | Should -Match 'when the app restarts'
         Test-Path "$(Split-Path $r.Path)\Upkeep\Reports\winget-noop-installs.json" | Should -BeFalse
+    }
+    It 'installs a non-MSI package in a second lane alongside an MSI one' {
+        $r = Invoke-FakeWinget parallel
+        $r.Code | Should -Be 0
+        $r.Output | Should -Match '1 of 2 package\(s\) install in a second lane'
+        $r.Output | Should -Match 'Fixture.Other finished in \d+s \(exit 0\), second lane'
+        $r.Calls | Should -Match 'upgrade --id Fixture.App'
+        $r.Calls | Should -Match 'upgrade --id Fixture.Other'
+    }
+    It 'installs a second-lane package again, alone, when Windows Installer was busy' {
+        $r = Invoke-FakeWinget busy
+        $r.Code | Should -Be 0
+        $r.Output | Should -Match 'another installation was in progress'
+        $r.Output | Should -Match 'Fixture.Other 1 -> 2 \(again, alone\)'
+        ([regex]::Matches($r.Calls, 'upgrade --id Fixture.Other')).Count | Should -Be 2
     }
     It 'keeps genuine installer failures as errors' {
         $r = Invoke-FakeWinget pending

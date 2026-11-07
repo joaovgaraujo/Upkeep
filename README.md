@@ -129,7 +129,12 @@ needs it. That has consequences worth understanding:
   lets you keep any skill as it is. G HUB's own updater runs even when its
   service is disabled, and the service is put back afterwards. A newer
   NVIDIA driver is listed at the end of the run with an "Open NVCleanstall"
-  button.
+  button. (1.8.8 was not published; these ship in 1.8.9.)
+- **Faster runs, and runs over SSH (1.8.9).** winget installs packages whose
+  installer doesn't use Windows Installer in a second lane, alongside the
+  rest, and topgrade's language and tool updaters run during winget. Started
+  over SSH, the engine runs itself in the signed-in desktop session (winget
+  doesn't start in an SSH session) and streams the output back.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different
