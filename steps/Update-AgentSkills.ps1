@@ -78,9 +78,12 @@ if (-not $Detect -and -not $AsUser -and (Test-Elevated)) {
         $cmd += " -$p '$v'"
     }
     $r = Invoke-Deelevated -Command $cmd -TimeoutSec 1800
+    # Unavailable means the user's side could not start (no desktop session,
+    # or a dead network drive): nothing was attempted, so the summary says
+    # skipped (exit 2), not error.
     if ($null -eq $r -or $r.Status -eq 'Unavailable') {
-        Write-Log "[skills] Could not run as your normal Windows user ($($r.Output)). Skills were not updated."
-        exit 1
+        Write-Log "[skills] Skipped: $("$($r.Output)".Trim()) Skills were not updated."
+        exit 2
     }
     Write-Log ("$($r.Output)".TrimEnd() -split "`r?`n")
     exit $r.ExitCode
