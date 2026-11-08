@@ -21,23 +21,28 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$BatPath,
-    [ValidateRange(1, 1440)][int]$TimeoutMin = 360
+    [ValidateRange(1, 1440)][int]$TimeoutMin = 360,
+    # Tests: write the task's script here and stop, without scheduling it.
+    [string]$WriteRunnerOnly
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Deelevate.ps1')
 
-try { $sid = Get-DeelevatedUserSid }
-catch {
-    Write-Host '[remote] Started over SSH, and this account is not signed in to Windows. Sign in (at the PC or over Remote Desktop) and run it again: winget and normal-user updates only work in a desktop session.'
-    exit 1
+if ($WriteRunnerOnly) { $sid = $null }
+else {
+    try { $sid = Get-DeelevatedUserSid }
+    catch {
+        Write-Host '[remote] Started over SSH, and this account is not signed in to Windows. Sign in (at the PC or over Remote Desktop) and run it again: winget and normal-user updates only work in a desktop session.'
+        exit 1
+    }
 }
 
 $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
-$work = Join-Path $env:TEMP "Upkeep_desktop_$tag"
+$work = if ($WriteRunnerOnly) { Split-Path -Parent $WriteRunnerOnly } else { Join-Path $env:TEMP "Upkeep_desktop_$tag" }
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 $out = Join-Path $work 'out.txt'
 $done = Join-Path $work 'done.txt'
-$runner = Join-Path $work 'run.ps1'
+$runner = if ($WriteRunnerOnly) { $WriteRunnerOnly } else { Join-Path $work 'run.ps1' }
 $taskName = "Upkeep_Desktop_$tag"
 
 # The run's own settings (DASHBOARD_*, UPKEEP_*) go with it; a task starts
@@ -58,6 +63,7 @@ $($envLines -join "`n")
 if (`$null -eq `$code) { `$code = 1 }
 Set-Content -LiteralPath '$($done.Replace("'", "''"))' -Value `$code -Encoding ascii
 "@ | Set-Content -LiteralPath $runner -Encoding UTF8
+if ($WriteRunnerOnly) { exit 0 }
 
 $code = 1
 try {
