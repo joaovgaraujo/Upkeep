@@ -29,10 +29,12 @@ BeforeAll {
 Describe 'topgrade output streams as it is produced' {
     BeforeAll {
         # A fake topgrade: one line, a silent stretch, another line, exit 7.
+        # The silence is 5x the heartbeat: on a slow runner the step can read
+        # 'first line' seconds late, and the heartbeat counts from that read.
         $fake = Join-Path $TestDrive 'fake-topgrade.cmd'
         Set-Content $fake -Encoding Ascii -Value @(
             '@echo first line'
-            '@powershell -NoProfile -Command "Start-Sleep -Seconds 4"'
+            '@powershell -NoProfile -Command "Start-Sleep -Seconds 10"'
             '@echo second line'
             '@exit /b 7'
         )
@@ -71,7 +73,7 @@ Describe 'Windows Update progress streams from the job' {
         $log = Join-Path $TestDrive 'wu.log'
         $runner = Join-Path $TestDrive 'wu-runner.ps1'
         Set-Content $runner -Value @"
-& '$repoRoot\steps\Invoke-WindowsUpdate.ps1' -LogFile '$log' -HeartbeatSec 2 -JobBody { 'Downloading KB0000001'; Start-Sleep -Seconds 5; 'Installed KB0000001' }
+& '$repoRoot\steps\Invoke-WindowsUpdate.ps1' -LogFile '$log' -HeartbeatSec 2 -JobBody { 'Downloading KB0000001'; Start-Sleep -Seconds 10; 'Installed KB0000001' }
 exit `$LASTEXITCODE
 "@
         $proc = Start-Step $runner @()
@@ -138,7 +140,7 @@ Describe 'Client worker output streams while the worker runs' {
         $case = Join-Path $TestDrive 'clients'
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Invoke-ClientUpdates.ps1", "$repoRoot\steps\Stream-Process.ps1" $case
-        Set-Content "$case\Update-StoreApps.ps1" "Write-Output '[store] early progress'; Start-Sleep -Seconds 5; Write-Output '[store] late progress'; exit 0"
+        Set-Content "$case\Update-StoreApps.ps1" "Write-Output '[store] early progress'; Start-Sleep -Seconds 10; Write-Output '[store] late progress'; exit 0"
         Set-Content "$case\Update-JDownloader.ps1" 'exit 2'
         Set-Content "$case\Update-SteamGames.ps1" 'exit 2'
         Set-Content "$case\Update-GHub.ps1" 'exit 2'
