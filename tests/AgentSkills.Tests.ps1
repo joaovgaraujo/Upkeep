@@ -50,6 +50,30 @@ Describe 'Agent skills synced from a git repository' {
         $r.Output | Should -Match 'my-skill: installed from'
         Get-Content "$case\skills\my-skill\SKILL.md" -Raw | Should -Match 'v1'
     }
+    It 'updates from its own process when a network drive holds up the normal user''s PowerShell' {
+        # A copy of the step whose Deelevate.ps1 says: elevated, and the
+        # normal-user helper reports the dead-drive probe.
+        $steps = Join-Path $case 'steps'
+        New-Item $steps -ItemType Directory | Out-Null
+        Copy-Item "$repoRoot\steps\Update-AgentSkills.ps1", "$repoRoot\steps\Deelevate.ps1" $steps
+        Add-Content "$steps\Deelevate.ps1" @'
+function Test-Elevated { $true }
+function Invoke-Deelevated { [pscustomobject]@{ Status = 'Unavailable'; Reason = 'UserPowerShell'; ExitCode = 1; Output = 'Windows PowerShell does not start for your normal Windows user within 20 seconds.' } }
+'@
+        $settings | Set-Content "$case\settings.json"
+        '{}' | Set-Content "$case\catalog.json"
+        $old = $env:LOCALAPPDATA
+        try {
+            $env:LOCALAPPDATA = "$case\local"
+            $out = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$steps\Update-AgentSkills.ps1" `
+                -SettingsPath "$case\settings.json" -CatalogPath "$case\catalog.json" -SkillsDir "$case\skills" 2>&1 | Out-String
+            $code = $LASTEXITCODE
+        } finally { $env:LOCALAPPDATA = $old }
+        $code | Should -Be 0
+        $out | Should -Match "Updating from the engine's own process instead"
+        $out | Should -Match 'my-skill: installed from'
+        Get-Content "$case\skills\my-skill\SKILL.md" -Raw | Should -Match 'v1'
+    }
     It 'updates an unedited skill when the repo changes' {
         (Invoke-Skills $case $settings).Code | Should -Be 0
         Update-SkillRepo "$case\src" 'v2'

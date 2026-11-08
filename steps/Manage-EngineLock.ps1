@@ -36,10 +36,10 @@ function Invoke-EngineLock {
     # Also protects runs from older versions, which never recorded an owner.
     # Scan even when the old folder is absent (another account has another TEMP).
     $engines = @(Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" -ErrorAction Stop |
-        Where-Object { $_.ProcessId -ne $Caller.ProcessId -and "$($_.ProcessId)" -ne "$env:UPKEEP_RELAY_PID" -and $_.CommandLine -match '(?i)SystemUpdate_Topgrade\.bat' })
-    # UPKEEP_RELAY_PID: the engine started over SSH that handed this run to
-    # the desktop session (steps\Invoke-InDesktop.ps1) and is only waiting
-    # for it; it is not a second engine.
+        Where-Object { $_.ProcessId -ne $Caller.ProcessId -and "$($_.ProcessId)" -notin ("$env:UPKEEP_RELAY_PID" -split ',') -and $_.CommandLine -match '(?i)SystemUpdate_Topgrade\.bat' })
+    # UPKEEP_RELAY_PID (comma-separated): the engine started over SSH that
+    # handed this run to the desktop session (steps\Invoke-InDesktop.ps1) and
+    # is only waiting for it; it is not a second engine.
     if ($engines.Count -gt 0) {
         Write-Host "[guard] Another update engine is running (PID $($engines[0].ProcessId)). Wait for it to finish or stop it in its Upkeep window."
         return 2

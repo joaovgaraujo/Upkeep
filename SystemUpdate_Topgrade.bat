@@ -37,11 +37,11 @@ if %errorLevel% neq 0 (
 rem -- Started over SSH: run in the desktop session instead -------------------
 rem    winget (a packaged app) does not start in an SSH session ("Access is
 rem    denied"), and normal-user updates need the user's desktop. The engine
-rem    runs again there through steps\Invoke-InDesktop.ps1, which prints its
-rem    output here and returns its exit code.
+rem    runs again there (:relay at the end of this file), its output printed
+rem    here and its exit code returned.
 if defined SSH_CONNECTION if not "%UPKEEP_IN_DESKTOP%"=="1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Invoke-InDesktop.ps1" -BatPath "%~f0"
-    exit /b !errorLevel!
+    call :relay
+    exit /b !RELAY_RC!
 )
 
 rem -- Single-instance guard: recover dead owners immediately ----------------
@@ -658,3 +658,55 @@ rem    background, so they may not all be done by the time this window closes.
 rem    Force a check anytime: open Store > Library > Get updates.
 rem
 rem ============================================================
+
+rem -- :relay - run this engine in the desktop session (started over SSH) ----
+rem    Plain cmd.exe and schtasks, no Windows PowerShell: an SSH session
+rem    reconnects the user's mapped network drives, and Windows PowerShell
+rem    checks every drive when it starts. With a network drive's server down, the
+rem    PowerShell that used to start the relay waited 9 minutes before doing
+rem    anything (the test laptop, 2026-11-07). The task runs elevated in the signed-in
+rem    desktop session (/it), which does not see those drives, and runs
+rem    steps\Invoke-InDesktop.ps1. That writes the engine's output as numbered
+rem    chunk files, printed here in order, then done.txt with the exit code.
+:relay
+set "RELAY_TAG=%RANDOM%%RANDOM%"
+set "RELAY_DIR=%TEMP%\Upkeep_desktop_!RELAY_TAG!"
+set "RELAY_TASK=Upkeep_Desktop_!RELAY_TAG!"
+set "RELAY_RC=1"
+mkdir "!RELAY_DIR!" 2>nul
+(set DASHBOARD_ & set UPKEEP_) > "!RELAY_DIR!\env.txt" 2>nul
+schtasks /create /tn "!RELAY_TASK!" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%~dp0steps\Invoke-InDesktop.ps1\" -WorkDir \"!RELAY_DIR!\"" /sc once /st 00:00 /it /rl highest /f >nul 2>&1
+if errorlevel 1 (
+    echo [remote] Started over SSH, and the update could not be handed to your desktop session: creating the scheduled task failed.
+    goto relay_cleanup
+)
+schtasks /run /tn "!RELAY_TASK!" >nul 2>&1
+echo [remote] Started over SSH: running the update in your desktop session, where winget works. Output follows.
+set /a RELAY_N=1, RELAY_WAIT=0
+:relay_loop
+if exist "!RELAY_DIR!\chunk_!RELAY_N!.txt" (
+    type "!RELAY_DIR!\chunk_!RELAY_N!.txt"
+    set /a RELAY_N+=1
+    goto relay_loop
+)
+if exist "!RELAY_DIR!\done.txt" goto relay_done
+if not exist "!RELAY_DIR!\started.txt" (
+    set /a RELAY_WAIT+=1
+    if !RELAY_WAIT! GEQ 90 (
+        echo [remote] The update did not start in a desktop session within 90 seconds. Sign in to Windows with this account, at the PC or over Remote Desktop, and run it again: winget and normal-user updates only work in a desktop session.
+        goto relay_cleanup
+    )
+)
+ping -n 2 127.0.0.1 >nul
+goto relay_loop
+:relay_done
+if exist "!RELAY_DIR!\chunk_!RELAY_N!.txt" (
+    type "!RELAY_DIR!\chunk_!RELAY_N!.txt"
+    set /a RELAY_N+=1
+    goto relay_done
+)
+set /p RELAY_RC=<"!RELAY_DIR!\done.txt"
+:relay_cleanup
+schtasks /delete /tn "!RELAY_TASK!" /f >nul 2>&1
+rd /s /q "!RELAY_DIR!" 2>nul
+exit /b

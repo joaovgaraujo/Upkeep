@@ -176,14 +176,25 @@ function Get-RemoveCommand {
 }
 
 $reset = "`$env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath','Machine'); "
+$script:inProcess = $false
 function Invoke-AsUser {
     param([string]$Command)
-    if (Test-Elevated) {
+    $r = $null
+    if ((Test-Elevated) -and -not $script:inProcess) {
         # 5 minutes, not the installer default of 15: these updates take
         # seconds, and one that hangs held the whole run (the test laptop, 2026-11-07).
         $r = Invoke-Deelevated -Command ($reset + $Command) -TimeoutSec 300
         if ($null -eq $r) { $r = [pscustomobject]@{ ExitCode = 1; Output = 'normal-user worker unavailable' } }
-    } else {
+        # A network drive holds up the user's PowerShell. npm and the CLIs'
+        # own updaters work in this process too: same account, its profile,
+        # and the elevated engine doesn't see that drive.
+        if ($r.Reason -eq 'UserPowerShell') {
+            Write-Log "[ai-cli] $($r.Output) Updating from the engine's own process instead (same account)."
+            $script:inProcess = $true
+            $r = $null
+        }
+    }
+    if ($null -eq $r) {
         $out = Invoke-Expression ($reset + $Command + ' 2>&1') | Out-String
         $r = [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $out }
     }

@@ -170,6 +170,22 @@ function npm {
         $r = Invoke-Step -Script 'Update-AiClis.ps1' -Prelude $fakeNpm
         $r.Code | Should -Be 2
     }
+    It 'updates from its own process when a network drive holds up the normal user''s PowerShell' {
+        $arrange = {
+            param($case)
+            & $arrangeNpm $case
+            # Elevated, and the normal-user helper reports the dead-drive probe.
+            Add-Content "$case\Deelevate.ps1" @'
+function Test-Elevated { $true }
+function Invoke-Deelevated { [pscustomobject]@{ Status = 'Unavailable'; Reason = 'UserPowerShell'; ExitCode = 1; Output = 'Windows PowerShell does not start for your normal Windows user within 20 seconds.' } }
+'@
+        }
+        $r = Invoke-Step -Script 'Update-AiClis.ps1' -Prelude $fakeNpm -Arrange $arrange
+        $r.Code | Should -Be 0
+        $r.Output | Should -Match "Updating from the engine's own process instead"
+        $r.Calls | Should -Match 'install -g @anthropic-ai/claude-code@latest'
+        $r.Output | Should -Match 'Claude Code \(npm\): updated 1.0.0 -> 9.9.9'
+    }
 }
 
 Describe 'Moving Claude Code to another install method' {

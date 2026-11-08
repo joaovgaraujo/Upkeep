@@ -128,7 +128,10 @@ function Invoke-Deelevated {
     try {
         $userSid = Get-DeelevatedUserSid
         if (-not (Test-UserPowerShellStarts -UserSid $userSid)) {
-            return [pscustomobject]@{ Status = 'Unavailable'; ExitCode = 1; Output = "Could not run as normal user: Windows PowerShell does not start for your normal Windows user within 20 seconds. A network drive that is not responding does this (an NFS or mapped drive whose server is down). Normal-user updates were skipped this run; reconnect or disconnect that drive." }
+            # Reason lets a caller that can work with an admin token of the
+            # same account (skills, AI CLIs) go on in its own process: the
+            # elevated engine does not see the user's network drives.
+            return [pscustomobject]@{ Status = 'Unavailable'; Reason = 'UserPowerShell'; ExitCode = 1; Output = "Windows PowerShell does not start for your normal Windows user within 20 seconds. A network drive that is not responding does this (an NFS or mapped drive whose server is down)." }
         }
         New-Item -ItemType Directory -Path $work -Force -ErrorAction Stop | Out-Null
         $outLiteral = $outFile.Replace("'", "''")

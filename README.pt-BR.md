@@ -137,6 +137,12 @@ vale entender:
   para o seu usuário normal (um drive de rede travado faz isso), as
   atualizações como usuário normal são puladas após uma checagem de 20
   segundos, em vez de travar a execução.
+- **Drives de rede travados não seguram a execução (1.9.2).** Quando o
+  Windows PowerShell não abre para o seu usuário normal, as skills do Claude
+  Code e as CLIs de IA atualizam pelo próprio processo do motor, com a mesma
+  conta. Via SSH, a passagem para a sessão da área de trabalho não abre mais o
+  Windows PowerShell na sessão SSH, então começa em um segundo em vez de
+  esperar pelos drives.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

@@ -140,6 +140,11 @@ needs it. That has consequences worth understanding:
   finishes. If Windows PowerShell can't start for your normal user (a dead
   network drive does this), normal-user updates are skipped after a
   20-second check instead of stalling the run.
+- **Dead network drives don't hold up a run (1.9.2).** When Windows PowerShell
+  can't start for your normal user, the Claude Code skills and the AI CLIs
+  update from the engine's own process instead, as the same account. Over SSH,
+  the hand-off to the desktop session no longer starts Windows PowerShell in
+  the SSH session, so it starts in a second instead of waiting on the drives.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

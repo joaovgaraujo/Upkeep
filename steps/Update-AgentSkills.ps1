@@ -78,15 +78,20 @@ if (-not $Detect -and -not $AsUser -and (Test-Elevated)) {
         $cmd += " -$p '$v'"
     }
     $r = Invoke-Deelevated -Command $cmd -TimeoutSec 1800
-    # Unavailable means the user's side could not start (no desktop session,
-    # or a dead network drive): nothing was attempted, so the summary says
-    # skipped (exit 2), not error.
-    if ($null -eq $r -or $r.Status -eq 'Unavailable') {
+    if ($r.Reason -eq 'UserPowerShell') {
+        # A network drive holds up the user's PowerShell. The elevated engine
+        # is the same account and doesn't see that drive, so the skills are
+        # updated from here; the files are the same ones in the same profile.
+        Write-Log "[skills] $($r.Output) Updating from the engine's own process instead (same account)."
+    } elseif ($null -eq $r -or $r.Status -eq 'Unavailable') {
+        # Nothing was attempted (no desktop session for this account), so the
+        # summary says skipped (exit 2), not error.
         Write-Log "[skills] Skipped: $("$($r.Output)".Trim()) Skills were not updated."
         exit 2
+    } else {
+        Write-Log ("$($r.Output)".TrimEnd() -split "`r?`n")
+        exit $r.ExitCode
     }
-    Write-Log ("$($r.Output)".TrimEnd() -split "`r?`n")
-    exit $r.ExitCode
 }
 
 # --- Sources ------------------------------------------------------------------

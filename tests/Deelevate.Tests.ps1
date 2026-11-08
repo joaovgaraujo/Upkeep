@@ -58,6 +58,7 @@ Describe 'Normal-user installer retries' {
         Mock Test-UserPowerShellStarts { $false }
         $r = Invoke-Deelevated -Command 'winget upgrade --id Fixture.App'
         $r.Status | Should -Be 'Unavailable'
+        $r.Reason | Should -Be 'UserPowerShell'
         $r.Output | Should -Match 'network drive that is not responding'
         Should -Invoke Register-ScheduledTask -Times 0
     }

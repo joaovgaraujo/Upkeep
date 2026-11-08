@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-    Runs the update engine in the signed-in desktop session when it was
-    started over SSH, and streams its output back.
+    Runs the update engine in the signed-in desktop session, for an engine
+    started over SSH. Runs INSIDE the scheduled task that
+    SystemUpdate_Topgrade.bat (:relay) registers.
 
 .DESCRIPTION
     An SSH session has no desktop, and much of an update needs one:
@@ -9,51 +10,58 @@
         alias and the real winget.exe fail with "Access is denied" (the test laptop,
         2026-11-07), so the first step stopped the run.
       * normal-user installs (steps\Deelevate.ps1) need the user's desktop.
-    This registers a one-off scheduled task for the same account, elevated
-    (RunLevel Highest) and Interactive, so it runs in the session where that
-    account is signed in. The task runs the engine with output to a file,
-    which is printed here as it grows. Exit code: the engine's.
 
-    The account must be signed in to Windows (at the PC or over Remote
-    Desktop). Stopping the SSH command does not stop the run; stop it from
-    the Upkeep window or end the task "Upkeep_Desktop_*".
+    The SSH side is plain cmd.exe, with no Windows PowerShell. An SSH session
+    reconnects the user's mapped network drives, and Windows PowerShell checks
+    every drive when it starts: with a network drive's server down, the PowerShell
+    that used to start this relay waited 9 minutes before doing anything
+    (the test laptop, 2026-11-07). This task runs elevated in the desktop session,
+    which does not see those drives.
+
+    Files in -WorkDir, shared with the SSH side:
+      env.txt        in   the run's DASHBOARD_*/UPKEEP_* settings (`set` output)
+      started.txt    out  this task has started
+      chunk_<n>.txt  out  the engine's output, complete lines, n = 1, 2, ...
+      done.txt       out  the engine's exit code, written after the last chunk
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$BatPath,
-    [ValidateRange(1, 1440)][int]$TimeoutMin = 360,
-    # Tests: write the task's script here and stop, without scheduling it.
+    # Default: the engine next to steps\. Not set in param(): Windows
+    # PowerShell 5.1 leaves $PSScriptRoot empty there under -File.
+    [string]$BatPath,
+    [Parameter(Mandatory)][string]$WorkDir,
+    # Tests: write the engine runner here and stop.
     [string]$WriteRunnerOnly
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'Deelevate.ps1')
+if (-not $BatPath) { $BatPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'SystemUpdate_Topgrade.bat' }
 
-if ($WriteRunnerOnly) { $sid = $null }
-else {
-    try { $sid = Get-DeelevatedUserSid }
-    catch {
-        Write-Host '[remote] Started over SSH, and this account is not signed in to Windows. Sign in (at the PC or over Remote Desktop) and run it again: winget and normal-user updates only work in a desktop session.'
-        exit 1
+$out = Join-Path $WorkDir 'out.txt'
+$engineDone = Join-Path $WorkDir 'engine_done.txt'
+$runner = if ($WriteRunnerOnly) { $WriteRunnerOnly } else { Join-Path $WorkDir 'run.ps1' }
+if (-not $WriteRunnerOnly) { Set-Content -LiteralPath (Join-Path $WorkDir 'started.txt') -Value $PID -Encoding ascii }
+
+# The run's own settings go with it; a task starts with the account's
+# default environment.
+$envLines = @()
+$envFile = Join-Path $WorkDir 'env.txt'
+if (Test-Path -LiteralPath $envFile) {
+    foreach ($line in Get-Content -LiteralPath $envFile) {
+        if ($line -match '^((?:DASHBOARD_|UPKEEP_)[A-Za-z0-9_]*)=(.*)$') {
+            $envLines += "`$env:$($Matches[1]) = '$($Matches[2].Replace("'", "''"))'"
+        }
     }
 }
+# The engine started over SSH keeps running SystemUpdate_Topgrade.bat while
+# it waits; the engine lock must not take it for a second engine. It runs in
+# another session (an SSH session is session 0); this task is in the desktop.
+$session = (Get-Process -Id $PID).SessionId
+$relayPids = @(Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.SessionId -ne $session -and $_.CommandLine -match '(?i)SystemUpdate_Topgrade\.bat' } |
+    ForEach-Object { $_.ProcessId })
+$envLines += "`$env:UPKEEP_RELAY_PID = '$($relayPids -join ',')'"
 
-$tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
-$work = if ($WriteRunnerOnly) { Split-Path -Parent $WriteRunnerOnly } else { Join-Path $env:TEMP "Upkeep_desktop_$tag" }
-New-Item -ItemType Directory -Path $work -Force | Out-Null
-$out = Join-Path $work 'out.txt'
-$done = Join-Path $work 'done.txt'
-$runner = if ($WriteRunnerOnly) { $WriteRunnerOnly } else { Join-Path $work 'run.ps1' }
-$taskName = "Upkeep_Desktop_$tag"
-
-# The run's own settings (DASHBOARD_*, UPKEEP_*) go with it; a task starts
-# with the account's default environment.
-$envLines = Get-ChildItem Env: | Where-Object { $_.Name -match '^(DASHBOARD_|UPKEEP_)' } |
-    ForEach-Object { "`$env:$($_.Name) = '$($_.Value.Replace("'", "''"))'" }
 $batLiteral = $BatPath.Replace("'", "''")
-# The calling cmd.exe keeps running SystemUpdate_Topgrade.bat while it
-# waits; the engine lock must not take it for a second engine.
-$relayPid = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId
-$envLines = @($envLines) + "`$env:UPKEEP_RELAY_PID = '$relayPid'"
 @"
 `$env:DASHBOARD_RUN = '1'
 $($envLines -join "`n")
@@ -61,62 +69,56 @@ $($envLines -join "`n")
 & cmd.exe /c ('"{0}" < NUL' -f '$batLiteral') *>&1 | ForEach-Object { `$_.ToString() | Out-File -FilePath '$($out.Replace("'", "''"))' -Append -Encoding utf8 }
 `$code = `$LASTEXITCODE
 if (`$null -eq `$code) { `$code = 1 }
-Set-Content -LiteralPath '$($done.Replace("'", "''"))' -Value `$code -Encoding ascii
+Set-Content -LiteralPath '$($engineDone.Replace("'", "''"))' -Value `$code -Encoding ascii
 "@ | Set-Content -LiteralPath $runner -Encoding UTF8
 if ($WriteRunnerOnly) { exit 0 }
 
+$utf8 = New-Object Text.UTF8Encoding($false)
+$script:chunk = 0
+function Write-Chunk([string]$Text) {
+    if (-not $Text) { return }
+    $script:chunk++
+    $final = Join-Path $WorkDir "chunk_$($script:chunk).txt"
+    # Written under another name, then renamed: the SSH side never sees half.
+    [IO.File]::WriteAllText("$final.tmp", $Text, $utf8)
+    Move-Item -LiteralPath "$final.tmp" -Destination $final -Force
+}
+
 $code = 1
 try {
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runner`""
-    $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-        -ExecutionTimeLimit ([TimeSpan]::FromMinutes($TimeoutMin))
-    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-    Start-ScheduledTask -TaskName $taskName
-    Write-Host '[remote] Started over SSH: running the update in your desktop session, where winget works. Output follows.'
-
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$runner`"" | Out-Null
     $read = 0
-    $deadline = (Get-Date).AddMinutes($TimeoutMin)
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Milliseconds 700
+    while ($true) {
+        $finished = Test-Path -LiteralPath $engineDone
         if (Test-Path -LiteralPath $out) {
             try {
                 $fs = [IO.File]::Open($out, 'Open', 'Read', 'ReadWrite')
                 try {
                     if ($fs.Length -gt $read) {
                         [void]$fs.Seek($read, 'Begin')
-                        $sr = New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8)
-                        $chunk = $sr.ReadToEnd()
-                        $read = $fs.Length
-                        # Hold back a partial last line until it is complete.
-                        $cut = $chunk.LastIndexOf("`n")
+                        $bytes = New-Object byte[] ($fs.Length - $read)
+                        $n = $fs.Read($bytes, 0, $bytes.Length)
+                        # Up to the last complete line; everything once the
+                        # engine has finished.
+                        $cut = if ($finished) { $n - 1 } else { [Array]::LastIndexOf($bytes, [byte]10, $n - 1) }
                         if ($cut -ge 0) {
-                            [Console]::Out.Write($chunk.Substring(0, $cut + 1).TrimStart([char]0xFEFF))
-                            $read -= [Text.Encoding]::UTF8.GetByteCount($chunk.Substring($cut + 1))
-                        } else { $read -= [Text.Encoding]::UTF8.GetByteCount($chunk) }
+                            Write-Chunk ([Text.Encoding]::UTF8.GetString($bytes, 0, $cut + 1).Replace([string][char]0xFEFF, ''))
+                            $read += $cut + 1
+                        }
                     }
                 } finally { $fs.Dispose() }
             } catch {}
         }
-        if (Test-Path -LiteralPath $done) {
-            Start-Sleep -Milliseconds 500
-            if (Test-Path -LiteralPath $out) {
-                $all = [IO.File]::ReadAllBytes($out)
-                if ($all.Length -gt $read) { [Console]::Out.Write([Text.Encoding]::UTF8.GetString($all, $read, $all.Length - $read)) }
-            }
-            [int]::TryParse(("$(Get-Content -LiteralPath $done -TotalCount 1)").Trim(), [ref]$code) | Out-Null
+        if ($finished) {
+            [int]::TryParse(("$(Get-Content -LiteralPath $engineDone -TotalCount 1)").Trim(), [ref]$code) | Out-Null
             break
         }
+        Start-Sleep -Milliseconds 700
     }
-    if (-not (Test-Path -LiteralPath $done)) { Write-Host "[remote] No result after $TimeoutMin min; the run may still be going in the desktop session (task $taskName)." }
 } catch {
-    Write-Host "[remote] Could not start the update in the desktop session: $($_.Exception.Message)"
+    Write-Chunk "[remote] Could not run the update in the desktop session: $($_.Exception.Message)`r`n"
     $code = 1
 } finally {
-    if (Test-Path -LiteralPath $done) {
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    Set-Content -LiteralPath (Join-Path $WorkDir 'done.txt') -Value $code -Encoding ascii
 }
 exit $code
