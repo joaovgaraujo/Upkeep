@@ -151,6 +151,10 @@ needs it. That has consequences worth understanding:
   end of the winget step no longer waits on it. RustDesk, which winget has no
   package for, updates from its signed GitHub release. The progress bar follows
   how long your earlier runs took and shows the time left.
+- **winget's list is read right; skills have one owner (1.9.4).** A table
+  where two column labels sit one space apart no longer reads as nothing
+  pending. Skills the `skills` CLI tracks are left to topgrade's Skills step,
+  and files in the skills folder your account can't open get their access back.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

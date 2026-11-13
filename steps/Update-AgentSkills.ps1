@@ -51,7 +51,9 @@ param(
     [switch]$AsUser,
     [string]$SettingsPath,
     [string]$CatalogPath,
-    [string]$SkillsDir
+    [string]$SkillsDir,
+    # The `skills` CLI's lock (npx skills, topgrade's "Skills" step).
+    [string]$AgentsLockPath
 )
 
 $ErrorActionPreference = 'Continue'
@@ -61,6 +63,7 @@ $root = Split-Path $PSScriptRoot -Parent
 if (-not $SettingsPath) { $SettingsPath = Join-Path $root 'settings.json' }
 if (-not $CatalogPath) { $CatalogPath = Join-Path $root 'skill-sources.json' }
 if (-not $SkillsDir) { $SkillsDir = Join-Path $env:USERPROFILE '.claude\skills' }
+if (-not $AgentsLockPath) { $AgentsLockPath = Join-Path $env:USERPROFILE '.agents\.skill-lock.json' }
 . (Join-Path $PSScriptRoot 'Deelevate.ps1')
 
 function Write-Log {
@@ -69,11 +72,47 @@ function Write-Log {
     if ($LogFile) { try { $Lines | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {} }
 }
 
+# Files under the skills folder the account can't read with its normal
+# token. graphify's skill had a references folder like that (created
+# 2026-11-07 during an elevated run), so `graphify install` failed with
+# "Access is denied" on every run. Only the elevated engine can give it back.
+function Repair-SkillAccess {
+    if (-not (Test-Path -LiteralPath $SkillsDir)) { return }
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $sid = $me.User
+    $broken = @()
+    $denied = @()
+    $items = @(Get-ChildItem -LiteralPath $SkillsDir -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable denied)
+    foreach ($e in $denied) { if ($e.TargetObject) { $broken += "$($e.TargetObject)" } }
+    foreach ($i in $items) {
+        try {
+            $acl = Get-Acl -LiteralPath $i.FullName -ErrorAction Stop
+            $mine = @($acl.Access | Where-Object {
+                    $_.AccessControlType -eq 'Allow' -and
+                    ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadData) -and
+                    $(try { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]) -eq $sid } catch { $false })
+                })
+            if (-not $mine.Count) { $broken += $i.FullName }
+        } catch { $broken += $i.FullName }
+    }
+    $tops = @($broken | Sort-Object -Unique | Sort-Object Length | Where-Object { $_ })
+    $done = @()
+    foreach ($b in $tops) {
+        if (@($done | Where-Object { $b.StartsWith("$_\", [StringComparison]::OrdinalIgnoreCase) }).Count) { continue }
+        & takeown.exe /F $b /R /D Y 2>&1 | Out-Null
+        & icacls.exe $b /reset /T /C /Q 2>&1 | Out-Null
+        & icacls.exe $b /setowner $me.Name /T /C /Q 2>&1 | Out-Null
+        $done += $b
+        Write-Log "[skills] Gave your account back access to $b (an elevated process had written it)."
+    }
+}
+
 # Skills live in the user profile: never write them with an admin token.
 if (-not $Detect -and -not $AsUser -and (Test-Elevated)) {
+    Repair-SkillAccess
     $self = $PSCommandPath.Replace("'", "''")
     $cmd = "& powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$self' -AsUser"
-    foreach ($p in @('SettingsPath', 'CatalogPath', 'SkillsDir')) {
+    foreach ($p in @('SettingsPath', 'CatalogPath', 'SkillsDir', 'AgentsLockPath')) {
         $v = (Get-Variable $p -ValueOnly).Replace("'", "''")
         $cmd += " -$p '$v'"
     }
@@ -243,6 +282,43 @@ function Format-Source {
     }
 }
 
+# --- Skills the `skills` CLI tracks -------------------------------------------
+# topgrade's "Skills" step runs `skills update`, which updates every skill in
+# ~\.agents\.skill-lock.json. Those skills have one owner: this step leaves
+# them alone. Before, both updated the same skills: `skills update` rewrote
+# SKILL.md without gh's metadata, and this step then backed the skill up and
+# reinstalled it with gh on every run (officecli, 2026-11-13).
+#
+# `gh skill install <repo> engineering/domain-modeling` records its lock entry
+# under that path, but `skills update` looks skills up by name, so it failed
+# with "No matching skills found" for 6 of them and topgrade's run went red.
+# Such entries are renamed to the skill's name.
+$lockOwned = @{}
+$lock = Read-Json $AgentsLockPath
+if ($lock -and $lock.skills) {
+    $renamed = @()
+    $entries = [ordered]@{}
+    foreach ($p in $lock.skills.PSObject.Properties) { $entries[$p.Name] = $p.Value }
+    foreach ($k in @($entries.Keys)) {
+        if ($k -notmatch '/') { continue }
+        $short = ($k -split '/')[-1]
+        if (-not $short -or $entries.Contains($short)) { continue }
+        $value = $entries[$k]
+        $entries.Remove($k)
+        $entries[$short] = $value
+        $renamed += $short
+    }
+    if ($renamed.Count -and -not $Detect) {
+        $lock.skills = [pscustomobject]$entries
+        try {
+            # No BOM: the skills CLI is Node, whose JSON.parse rejects one.
+            [IO.File]::WriteAllText($AgentsLockPath, (ConvertTo-Json -InputObject $lock -Depth 10), (New-Object Text.UTF8Encoding($false)))
+            Write-Log "[skills] Renamed $($renamed.Count) entr$(if ($renamed.Count -eq 1) { 'y' } else { 'ies' }) in the skills CLI's lock to the skill's name, so topgrade's Skills step can update them: $($renamed -join ', ')."
+        } catch { Write-Log "[skills] Could not fix the skills CLI's lock: $($_.Exception.Message)" }
+    }
+    foreach ($k in $entries.Keys) { $lockOwned[$k] = "$($entries[$k].source)" }
+}
+
 # Skills in the folder, plus every skill in the user's repos (installed if missing).
 $names = [ordered]@{}
 if (Test-Path -LiteralPath $SkillsDir) {
@@ -258,7 +334,7 @@ if ($Detect) {
     foreach ($n in $names.Keys) {
         $src = $sources[$n]
         $tracked = Get-GhMetadata $n
-        $label = if ($src) { Format-Source $src } elseif ($tracked) { "GitHub $($tracked -replace '^https://github.com/', '')" } else { '' }
+        $label = if ($src) { Format-Source $src } elseif ($tracked) { "GitHub $($tracked -replace '^https://github.com/', '')" } elseif ($lockOwned[$n]) { "GitHub $($lockOwned[$n])" } else { '' }
         if (-not $label) { continue }
         $list += [pscustomobject]@{ Name = $n; Source = $label; Keep = ($keep -contains $n) }
     }
@@ -299,6 +375,10 @@ function Add-Manual {
 $noSource = @()
 foreach ($n in @($names.Keys)) {
     $src = $sources[$n]
+    if ($lockOwned.ContainsKey($n) -and "$($src.type)" -notin @('git', 'graphify')) {
+        Write-Log "[skills] $($n): updated by topgrade's Skills step (skills CLI, $($lockOwned[$n]))."
+        continue
+    }
     if (-not $src) {
         if (-not (Get-GhMetadata $n)) { $noSource += $n }
         continue

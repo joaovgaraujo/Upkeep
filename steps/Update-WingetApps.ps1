@@ -170,11 +170,15 @@ function Get-PendingUpgrades {
     }
     if ($headerIdx -lt 0) { return $result }
     # Column positions are stable across translated header labels.
-    $columns = @([regex]::Matches($lines[$headerIdx], '\S.*?(?=\s{2,}|$)'))
     # winget pads a column with a single space when its widest value is exactly
     # as long as the label ("Version Available Source" over "Unknown 6.0.0"),
-    # which merges labels above. The labels themselves are one word each, so
-    # fall back to plain word boundaries before giving up.
+    # which merges labels when splitting on two spaces. The labels are one
+    # word each, so the five words are the columns. Splitting on two spaces
+    # first merged "Available Source" over "2.0.7.890" into one column, every
+    # row's version read "1.0.111   winget", and the run updated nothing
+    # with 9 packages pending (2026-11-13).
+    $columns = @([regex]::Matches($lines[$headerIdx], '\S+'))
+    if ($columns.Count -ne 5) { $columns = @([regex]::Matches($lines[$headerIdx], '\S.*?(?=\s{2,}|$)')) }
     if ($columns.Count -lt 4) { $columns = @([regex]::Matches($lines[$headerIdx], '\S+')) }
     if ($columns.Count -lt 4) { throw 'Unrecognized winget inventory columns; refusing to report a successful inventory.' }
     $idPos = $columns[1].Index
@@ -182,6 +186,7 @@ function Get-PendingUpgrades {
     $availPos = $columns[3].Index
     $srcPos = if ($columns.Count -gt 4) { $columns[4].Index } else { -1 }
 
+    $rows = 0
     for ($j = $headerIdx + 2; $j -lt $limit; $j++) {
         $l = $lines[$j]
         if ([string]::IsNullOrWhiteSpace($l)) { break }
@@ -197,8 +202,12 @@ function Get-PendingUpgrades {
         $cur = $l.Substring($verPos, $availPos - $verPos).Trim()
         $end = if ($srcPos -gt $availPos -and $l.Length -gt $srcPos) { $srcPos - $availPos } else { $l.Length - $availPos }
         $avail = $l.Substring($availPos, $end).Trim()
+        if ($avail -match '\s') { $rows++ }
         if ($id -match '^[A-Za-z0-9][A-Za-z0-9._+\-]+$' -and $avail -notmatch '\s') { $result[$id] = [pscustomobject]@{ Id = $id; Name = $l.Substring(0, $idPos).Trim(); Current = $cur; Available = $avail } }
     }
+    # A version with a space in it means the columns were misread; with no
+    # row read, that is not "nothing pending".
+    if ($rows -gt 0 -and $result.Count -eq 0) { throw "Could not read winget's upgrade table ($rows row(s) misread); refusing to report nothing pending.`n$raw" }
     # Never individually retry the installer that caused an unsolicited reboot.
     $result.Remove('ElectronicArts.EADesktop')
     # Launchers that update themselves when they start, which Upkeep does

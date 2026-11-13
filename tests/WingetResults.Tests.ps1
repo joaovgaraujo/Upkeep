@@ -2,7 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known','battlenet','restart-pending','parallel','busy','prefetch','prefetch-stuck')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known','battlenet','restart-pending','parallel','busy','prefetch','prefetch-stuck','tight-source')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1", "$repoRoot\steps\InUse.ps1" $case
@@ -83,6 +83,17 @@ function winget {
         ''
         return
     }
+    if ('SCENARIO' -eq 'tight-source') {
+        # Real output (2026-11-13): '2.0.7.890' is exactly as wide as 'Available', so one space separates 'Available Source'.
+        'Name                              Id                                       Version   Available Source'
+        '-' * 101
+        'GitHub Copilot CLI                GitHub.Copilot                           1.0.109   1.0.111   winget'
+        'Snappy Driver Installer Origin    GlennDelahoy.SnappyDriverInstallerOrigin 2.0.6.889 2.0.7.890 winget'
+        'Telegram Desktop                  Telegram.TelegramDesktop                 7.4.2     7.4.3     winget'
+        '3 upgrades available.'
+        ''
+        return
+    }
     if ('SCENARIO' -eq 'unknown-installed') {
         # DisplayVersion is empty, so winget reports Unknown and offers an OLDER build than the name shows.
         '{0,-20}{1,-35}{2,-15}{3,-15}Source' -f 'Name','Id','Version','Available'
@@ -105,7 +116,7 @@ function winget {
     ''
 }
 try {
-if ('SCENARIO' -eq 'inventory') { & "$PSScriptRoot\Update-WingetApps.ps1" -InventoryOnly; exit $LASTEXITCODE }
+if ('SCENARIO' -in @('inventory','tight-source')) { &"$PSScriptRoot\Update-WingetApps.ps1" -InventoryOnly; exit $LASTEXITCODE }
 # A Git Bash process running from wherever Git is installed on this machine.
 function Get-CimInstance {
     if ($args[0] -ne 'Win32_Process') { return CimCmdlets\Get-CimInstance @args }
@@ -364,6 +375,14 @@ Describe 'Apps winget cannot update here are reported, not failed' {
         $r.Output | Should -Match 'Fixture.App finished in \d+s \(exit 0\)'
         $r.Output | Should -Match 'Fixture.Other finished in \d+s \(exit 0\), second lane'
         $r.Output | Should -Match 'Downloaded ahead: 0 of 2'
+    }
+    It 'reads the table when Available and Source are one space apart' {
+        $r = Invoke-FakeWinget tight-source
+        $r.Code | Should -Be 0
+        $json = @($r.Output.Trim() | ConvertFrom-Json)
+        $json.Count | Should -Be 3
+        ($json | Where-Object Id -eq 'Telegram.TelegramDesktop').Available | Should -Be '7.4.3'
+        ($json | Where-Object Id -eq 'GlennDelahoy.SnappyDriverInstallerOrigin').Available | Should -Be '2.0.7.890'
     }
     It 'keeps genuine installer failures as errors' {
         $r = Invoke-FakeWinget pending

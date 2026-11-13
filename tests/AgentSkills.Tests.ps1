@@ -29,7 +29,7 @@ BeforeAll {
         try {
             $env:LOCALAPPDATA = "$Case\local"
             $out = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$repoRoot\steps\Update-AgentSkills.ps1" -AsUser `
-                -SettingsPath "$Case\settings.json" -CatalogPath "$Case\catalog.json" -SkillsDir "$Case\skills" $Extra 2>&1 | Out-String
+                -SettingsPath "$Case\settings.json" -CatalogPath "$Case\catalog.json" -SkillsDir "$Case\skills" -AgentsLockPath "$Case\skill-lock.json" $Extra 2>&1 | Out-String
             $code = $LASTEXITCODE
         } finally { $env:LOCALAPPDATA = $old }
         [pscustomobject]@{ Code = $code; Output = $out }
@@ -66,7 +66,7 @@ function Invoke-Deelevated { [pscustomobject]@{ Status = 'Unavailable'; Reason =
         try {
             $env:LOCALAPPDATA = "$case\local"
             $out = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$steps\Update-AgentSkills.ps1" `
-                -SettingsPath "$case\settings.json" -CatalogPath "$case\catalog.json" -SkillsDir "$case\skills" 2>&1 | Out-String
+                -SettingsPath "$case\settings.json" -CatalogPath "$case\catalog.json" -SkillsDir "$case\skills" -AgentsLockPath "$case\skill-lock.json" 2>&1 | Out-String
             $code = $LASTEXITCODE
         } finally { $env:LOCALAPPDATA = $old }
         $code | Should -Be 0
@@ -107,6 +107,23 @@ function Invoke-Deelevated { [pscustomobject]@{ Status = 'Unavailable'; Reason =
         $r = Invoke-Skills $case $keep
         $r.Output | Should -Match 'kept as is'
         Get-Content "$case\skills\my-skill\SKILL.md" -Raw | Should -Match 'v1'
+    }
+    It 'leaves a skill the skills CLI tracks to it, and fixes its lock entry' {
+        New-Item "$case\skills\other" -ItemType Directory -Force | Out-Null
+        "---`nname: other`n---`nx" | Set-Content "$case\skills\other\SKILL.md"
+        '{"version":3,"skills":{"engineering/other":{"source":"someone/skills","sourceType":"github","skillPath":"skills/engineering/other/SKILL.md"}}}' |
+            Set-Content "$case\skill-lock.json"
+        $r = Invoke-Skills $case '{}'
+        $r.Code | Should -Be 0
+        $r.Output | Should -Match 'Renamed 1 entry .*: other\.'
+        $r.Output | Should -Match "other: updated by topgrade's Skills step \(skills CLI, someone/skills\)"
+        $r.Output | Should -Not -Match 'other: no source set'
+        $bytes = [IO.File]::ReadAllBytes("$case\skill-lock.json")
+        $bytes[0] | Should -Be ([byte][char]'{')
+        $lock = Get-Content "$case\skill-lock.json" -Raw | ConvertFrom-Json
+        $lock.skills.other.skillPath | Should -Be 'skills/engineering/other/SKILL.md'
+        $lock.skills.PSObject.Properties.Name | Should -Not -Contain 'engineering/other'
+        $lock.version | Should -Be 3
     }
     It 'lists skills and their source as JSON without changing anything' {
         (Invoke-Skills $case $settings).Code | Should -Be 0

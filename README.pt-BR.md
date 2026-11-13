@@ -149,6 +149,11 @@ vale entender:
   winget não espera mais por ele. O RustDesk, que não tem pacote no winget,
   atualiza pela versão assinada no GitHub. A barra de progresso segue o tempo
   das suas execuções anteriores e mostra o tempo restante.
+- **A lista do winget é lida certo; skills têm um dono só (1.9.4).** Uma
+  tabela em que dois rótulos de coluna ficam a um espaço de distância não é
+  mais lida como nada pendente. Skills que o CLI `skills` acompanha ficam com
+  a etapa Skills do topgrade, e arquivos da pasta de skills que a sua conta
+  não consegue abrir têm o acesso devolvido.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro
