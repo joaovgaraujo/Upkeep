@@ -3,7 +3,7 @@ BeforeAll {
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeClients {
         param([int]$Parallel = 3, [int]$Timeout = 15, [string]$Store = 'exit 0',
-            [string]$JD = 'exit 0', [string]$Steam = 'exit 0', [string]$GHub = 'exit 2')
+            [string]$JD = 'exit 0', [string]$Steam = 'exit 0', [string]$GHub = 'exit 2', [string]$RustDesk = 'exit 2')
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Invoke-ClientUpdates.ps1", "$repoRoot\steps\Stream-Process.ps1" $case
@@ -11,6 +11,7 @@ BeforeAll {
         Set-Content "$case\Update-JDownloader.ps1" $JD
         Set-Content "$case\Update-SteamGames.ps1" $Steam
         Set-Content "$case\Update-GHub.ps1" $GHub
+        Set-Content "$case\Update-RustDesk.ps1" $RustDesk
         & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File "$case\Invoke-ClientUpdates.ps1" `
             -ResultFile "$case\result.txt" -LogFile "$case\run.log" -MaxParallel $Parallel -TimeoutSec $Timeout | Out-Null
         [pscustomobject]@{ Code=$LASTEXITCODE; Path=$case; Result=(Get-Content "$case\result.txt" -Raw) }
@@ -63,10 +64,10 @@ Start-Sleep -Milliseconds 300
     }
     It 'honors skipped categories without launching workers' {
         $env:DASHBOARD_SKIP_APPS = '1'; $env:DASHBOARD_SKIP_STORE = '1'; $env:DASHBOARD_SKIP_STEAM = '1'
-        $run = Invoke-FakeClients -Store 'throw "must not run"' -JD 'throw "must not run"' -Steam 'throw "must not run"' -GHub 'throw "must not run"'
+        $run = Invoke-FakeClients -Store 'throw "must not run"' -JD 'throw "must not run"' -Steam 'throw "must not run"' -GHub 'throw "must not run"' -RustDesk 'throw "must not run"'
         $run.Code | Should -Be 0
-        # STORE, JD, STEAM and GHUB all skipped.
-        ($run.Result -split 'skipped').Count | Should -Be 5
+        # STORE, JD, STEAM, GHUB and RUSTDESK all skipped.
+        ($run.Result -split 'skipped').Count | Should -Be 6
     }
     It 'keeps JDownloader out of a reviewed WinGet and Store run' {
         $env:DASHBOARD_SKIP_OTHER_APPS = '1'

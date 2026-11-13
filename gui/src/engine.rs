@@ -156,6 +156,7 @@ fn category_from_tag(line: &str) -> Option<Category> {
         || lower.contains("[ea]")
         || lower.contains("[launch]")
         || lower.contains("[jdownloader]")
+        || lower.contains("[rustdesk]")
         || lower.contains("[setup]")
         || lower.contains("[pins]")
         || lower.contains("[discord]")

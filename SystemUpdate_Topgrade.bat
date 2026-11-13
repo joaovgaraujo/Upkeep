@@ -449,6 +449,7 @@ set "STORE_STATUS=error"
 set "JD_STATUS=error"
 set "STEAM_STATUS=error"
 set "GHUB_STATUS=error"
+set "RUSTDESK_STATUS=error"
 set "CLIENT_WAIT_SEC=4200"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Wait-BackgroundStep.ps1" -PidFile "%CLIENT_PIDFILE%" -LogFile "%LOGFILE%" -Tag clients -TimeoutSec %CLIENT_WAIT_SEC%
 if exist "%CLIENT_RESULTS%" for /f "usebackq tokens=1,2 delims==" %%A in ("%CLIENT_RESULTS%") do set "%%A=%%B"
@@ -508,6 +509,7 @@ echo   Store           : %STORE_STATUS%
 echo   Steam games     : %STEAM_STATUS%
 echo   JDownloader     : %JD_STATUS%
 echo   G HUB           : %GHUB_STATUS%
+echo   RustDesk        : %RUSTDESK_STATUS%
 echo   NVIDIA driver   : %NVIDIA_STATUS%
 echo   EA app          : %EA_STATUS%
 echo ----------------------------------------

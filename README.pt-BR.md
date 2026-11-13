@@ -143,6 +143,12 @@ vale entender:
   conta. Via SSH, a passagem para a sessão da área de trabalho não abre mais o
   Windows PowerShell na sessão SSH, então começa em um segundo em vez de
   esperar pelos drives.
+- **Sem espera por download travado; RustDesk atualiza (1.9.3).** Um
+  download que o winget começa antes e que nunca termina é parado após 5
+  minutos, e o winget baixa esse pacote durante a instalação. O fim da etapa do
+  winget não espera mais por ele. O RustDesk, que não tem pacote no winget,
+  atualiza pela versão assinada no GitHub. A barra de progresso segue o tempo
+  das suas execuções anteriores e mostra o tempo restante.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

@@ -144,6 +144,7 @@ Describe 'Client worker output streams while the worker runs' {
         Set-Content "$case\Update-JDownloader.ps1" 'exit 2'
         Set-Content "$case\Update-SteamGames.ps1" 'exit 2'
         Set-Content "$case\Update-GHub.ps1" 'exit 2'
+        Set-Content "$case\Update-RustDesk.ps1" 'exit 2'
         $log = Join-Path $case 'run.log'
         $proc = Start-Step "$case\Invoke-ClientUpdates.ps1" @('-ResultFile', "`"$case\result.txt`"", '-LogFile', "`"$log`"", '-HeartbeatSec', '2')
         Wait-ForText $log '\[store\] early progress' | Should -BeTrue

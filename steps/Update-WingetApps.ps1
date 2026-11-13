@@ -503,13 +503,21 @@ function Get-InstallerTypes {
 function Start-LaneTwo {
     param([string[]]$Ids, [string]$ReadyDir)
     $ps = [powershell]::Create()
-    [void]$ps.AddScript("param(`$Ids, `$ReadyDir)`n" + (Get-WingetPrelude) + {
+    [void]$ps.AddScript("param(`$Ids, `$ReadyDir, `$StallSec)`n" + (Get-WingetPrelude) + $script:prefetchHelpers.ToString() + {
             $left = New-Object System.Collections.ArrayList(, [string[]]$Ids)
             while ($left.Count) {
                 # Next package whose download finished (all of them when not downloading ahead).
-                $id = $null; $deadline = (Get-Date).AddSeconds(900)
+                $id = $null; $note = ''; $deadline = (Get-Date).AddSeconds(900)
                 while (-not $id) {
                     foreach ($c in @($left)) { if (-not $ReadyDir -or (Test-Path -LiteralPath (Join-Path $ReadyDir "$c.ready"))) { $id = $c; break } }
+                    if (-not $id) {
+                        foreach ($c in @($left)) {
+                            if (Test-PrefetchStalled -Root $ReadyDir -Id $c -StallSec $StallSec) {
+                                Stop-PrefetchDownload -Root $ReadyDir -Id $c
+                                $id = $c; $note = (Get-PrefetchStallNote -Id $c -StallSec $StallSec) + "`n"; break
+                            }
+                        }
+                    }
                     if (-not $id -and (Get-Date) -gt $deadline) { $id = $left[0] }
                     if (-not $id) { Start-Sleep -Milliseconds 500 }
                 }
@@ -517,9 +525,9 @@ function Start-LaneTwo {
                 $started = Get-Date
                 $out = winget upgrade --id $id --exact --include-unknown --silent --disable-interactivity `
                     --accept-source-agreements --accept-package-agreements 2>&1 | Out-String
-                [pscustomobject]@{ Id = $id; ExitCode = $LASTEXITCODE; Output = $out; Seconds = ((Get-Date) - $started).TotalSeconds }
+                [pscustomobject]@{ Id = $id; ExitCode = $LASTEXITCODE; Output = $note + $out; Seconds = ((Get-Date) - $started).TotalSeconds }
             }
-        }.ToString()).AddArgument($Ids).AddArgument($ReadyDir)
+        }.ToString()).AddArgument($Ids).AddArgument($ReadyDir).AddArgument($script:prefetchStallSec)
     $output = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
     $inbox = New-Object 'System.Management.Automation.PSDataCollection[psobject]'
     $inbox.Complete()
@@ -551,7 +559,40 @@ function Test-InstallerBusy {
 # winget downloads that package itself; a different installer than the one
 # downloaded has a different hash and is downloaded as usual.
 # UPKEEP_NO_PREFETCH=1 turns this off.
+#
+# A download can also never finish. Two downloads that need the same file
+# (Microsoft.PowerShell, and GitHub.Copilot, which depends on it) collide:
+# run side by side, one fails with 0x80070020 "being used by another
+# process", and in a run one never returned. The installs waited 15 minutes
+# for it and the end of the step waited forever (2026-11-12 and 11-13). So a
+# download still running after $prefetchStallSec is stopped and winget
+# downloads that package itself during the install; the step never waits on
+# a download once the installs are done.
 $script:prefetch = $null
+$script:prefetchStallSec = 300
+if ("$env:UPKEEP_PREFETCH_STALL_SEC" -match '^\d+$') { $script:prefetchStallSec = [int]$env:UPKEEP_PREFETCH_STALL_SEC }
+# Also defined inside lane two's runspace.
+$script:prefetchHelpers = {
+    function Test-PrefetchStalled([string]$Root, [string]$Id, [int]$StallSec) {
+        if (-not $Root) { return $false }
+        $mark = Join-Path $Root "$Id.started"
+        if (-not (Test-Path -LiteralPath $mark)) { return $false }
+        ((Get-Date) - (Get-Item -LiteralPath $mark).LastWriteTime).TotalSeconds -ge $StallSec
+    }
+    function Get-PrefetchStallNote([string]$Id, [int]$StallSec) {
+        "[winget]   $Id : its download had not finished after $([math]::Round($StallSec / 60, 1)) min - stopped; winget downloads it during the install."
+    }
+    # Ends the `winget download` of $Id started for this run, or all of them.
+    function Stop-PrefetchDownload([string]$Root, [string]$Id) {
+        if (-not $Root) { return }
+        $dir = if ($Id) { Join-Path $Root $Id } else { $Root }
+        $pattern = [regex]::Escape($dir) + $(if ($Id) { '(["\s]|$)' } else { '' })
+        Get-CimInstance Win32_Process -Filter "Name = 'winget.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { "$($_.CommandLine)" -match $pattern } |
+            ForEach-Object { & taskkill.exe /T /F /PID $_.ProcessId 2>&1 | Out-Null }
+    }
+}
+. $script:prefetchHelpers
 function Start-Prefetch {
     param([string[]]$Ids)
     if (-not $Ids.Count -or $env:UPKEEP_NO_PREFETCH -eq '1' -or $env:UPKEEP_WINGET_SERIAL -eq '1') { return }
@@ -565,6 +606,8 @@ function Start-Prefetch {
         $ps.RunspacePool = $pool
         [void]$ps.AddScript("param(`$Id, `$Root, `$Cache)`n" + $prelude + {
                 $started = Get-Date
+                # When this download began (four run at a time; the rest queue).
+                Set-Content -LiteralPath (Join-Path $Root "$Id.started") -Value '' -Encoding ASCII
                 $dir = Join-Path $Root $Id
                 $ok = $false
                 try {
@@ -604,6 +647,13 @@ function Get-NextReady {
         foreach ($id in @($Ids)) {
             if (Test-Path -LiteralPath (Join-Path $script:prefetch.Root "$id.ready")) { [void]$Ids.Remove($id); return $id }
         }
+        foreach ($id in @($Ids)) {
+            if (Test-PrefetchStalled -Root $script:prefetch.Root -Id $id -StallSec $script:prefetchStallSec) {
+                Stop-PrefetchDownload -Root $script:prefetch.Root -Id $id
+                Write-StepOutput (Get-PrefetchStallNote -Id $id -StallSec $script:prefetchStallSec)
+                [void]$Ids.Remove($id); return $id
+            }
+        }
         if ((Get-Date) -gt $deadline) { $id = $Ids[0]; $Ids.RemoveAt(0); return $id }
         if ($WhileWaiting) { & $WhileWaiting }
         Start-Sleep -Milliseconds 500
@@ -612,12 +662,26 @@ function Get-NextReady {
 
 function Stop-Prefetch {
     if (-not $script:prefetch) { return }
+    # Every package is installed by now: a download still running is no use.
+    $running = @($script:prefetch.Jobs | Where-Object { -not $_.Handle.IsCompleted })
+    if ($running.Count) {
+        Stop-PrefetchDownload -Root $script:prefetch.Root
+        $until = (Get-Date).AddSeconds(10)
+        while ((Get-Date) -lt $until -and @($running | Where-Object { -not $_.Handle.IsCompleted }).Count) { Start-Sleep -Milliseconds 200 }
+    }
     $ok = 0
+    $left = 0
     foreach ($j in $script:prefetch.Jobs) {
+        if (-not $j.Handle.IsCompleted) {
+            # Not waited on (EndInvoke or Close would block); ends with the step.
+            $left++
+            $null = $j.PS.BeginStop($null, $null)
+            continue
+        }
         try { $r = @($j.PS.EndInvoke($j.Handle))[-1]; if ($r.Ok) { $ok++ } } catch {}
         $j.PS.Dispose()
     }
-    $script:prefetch.Pool.Close()
+    if (-not $left) { $script:prefetch.Pool.Close() }
     Write-StepOutput "[winget] Downloaded ahead: $ok of $($script:prefetch.Ids.Count) package(s); the rest were downloaded by winget itself."
     Remove-Item -LiteralPath $script:prefetch.Root -Recurse -Force -ErrorAction SilentlyContinue
 }

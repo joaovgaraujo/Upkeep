@@ -2,7 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known','battlenet','restart-pending','parallel','busy','prefetch')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known','battlenet','restart-pending','parallel','busy','prefetch','prefetch-stuck')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1", "$repoRoot\steps\InUse.ps1" $case
@@ -23,6 +23,7 @@ $env:LOCALAPPDATA = $PSScriptRoot
 $env:TEMP = Join-Path $PSScriptRoot 'tmp'; New-Item $env:TEMP -ItemType Directory -Force | Out-Null
 $global:scan = 0
 $global:normalUpdated = $false
+$env:UPKEEP_PREFETCH_STALL_SEC = '3'
 $env:UPKEEP_FIXTURE_TIMEOUT = if ('SCENARIO' -eq 'nonadmin-timeout') { '1' } else { '0' }
 Remove-Item Env:UPKEEP_SELECTED_IDS -ErrorAction SilentlyContinue
 function winget {
@@ -30,6 +31,8 @@ function winget {
     for ($try = 0; $try -lt 50; $try++) { try { [IO.File]::AppendAllText("$env:LOCALAPPDATA\calls.txt", ($args -join ' ') + "`r`n"); break } catch { Start-Sleep -Milliseconds 20 } }
     $global:LASTEXITCODE = 0
     if ($args[0] -eq 'download') {
+        # A download that never finishes (two downloads colliding on one file).
+        if ('SCENARIO' -eq 'prefetch-stuck') { Start-Sleep -Seconds 600; return }
         if ('SCENARIO' -eq 'prefetch') {
             $dir = $args[$args.IndexOf('-d') + 1]; $id = $args[$args.IndexOf('--id') + 1]
             New-Item $dir -ItemType Directory -Force | Out-Null
@@ -39,10 +42,10 @@ function winget {
         return
     }
     if ($args[0] -eq 'show') {
-        if ('SCENARIO' -in @('parallel','busy','prefetch')) { if ($args -contains 'Fixture.Other') { 'Installer Type: exe' } else { 'Installer Type: msi' } }
+        if ('SCENARIO' -in @('parallel','busy','prefetch','prefetch-stuck')) { if ($args -contains 'Fixture.Other') { 'Installer Type: exe' } else { 'Installer Type: msi' } }
         return
     }
-    if ($args -contains '--id' -and 'SCENARIO' -in @('parallel','prefetch')) { 'Successfully installed'; return }
+    if ($args -contains '--id' -and 'SCENARIO' -in @('parallel','prefetch','prefetch-stuck')) { 'Successfully installed'; return }
     if ($args -contains '--id' -and 'SCENARIO' -eq 'busy') {
         if ($args -contains 'Fixture.Other' -and -not (Test-Path "$env:LOCALAPPDATA\busy-once")) {
             New-Item "$env:LOCALAPPDATA\busy-once" -ItemType File | Out-Null
@@ -50,7 +53,7 @@ function winget {
         }
         'Successfully installed'; return
     }
-    if ('SCENARIO' -in @('parallel','busy','prefetch') -and $args -notcontains '--id' -and $global:scan -ge 1) { $global:scan++; return }
+    if ('SCENARIO' -in @('parallel','busy','prefetch','prefetch-stuck') -and $args -notcontains '--id' -and $global:scan -ge 1) { $global:scan++; return }
     if ($args -contains '--all') {
         if ('SCENARIO' -eq 'bulk-error') { $global:LASTEXITCODE = 1 }
         return
@@ -98,7 +101,7 @@ function winget {
     if ('SCENARIO' -eq 'battlenet') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Battle.net','Blizzard.BattleNet','Unknown','2.0.0.4232'; ''; return }
     if ('SCENARIO' -eq 'git-in-use') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Git','Git.Git','2.56.0','2.56.0.3'; ''; return }
     '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Fixture','Fixture.App','1','2'
-    if ('SCENARIO' -in @('retry','selected','ignored','empty-selection','inventory','parallel','busy','prefetch')) { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Other','Fixture.Other','1','2' }
+    if ('SCENARIO' -in @('retry','selected','ignored','empty-selection','inventory','parallel','busy','prefetch','prefetch-stuck')) { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Other','Fixture.Other','1','2' }
     ''
 }
 try {
@@ -350,6 +353,17 @@ Describe 'Apps winget cannot update here are reported, not failed' {
         $r.Output | Should -Match 'Downloaded ahead: 2 of 2'
         $r.Calls | Should -Match 'download --id Fixture.App'
         Test-Path "$(Split-Path $r.Path)\tmp\WinGet\Fixture.Other.2\$('ab' * 32)" | Should -BeTrue
+    }
+    It 'stops waiting for a download that never finishes, in both lanes' {
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $r = Invoke-FakeWinget prefetch-stuck
+        $watch.Elapsed.TotalSeconds | Should -BeLessThan 120
+        $r.Code | Should -Be 0
+        $r.Output | Should -Match 'Fixture.App : its download had not finished after .* winget downloads it during the install'
+        $r.Output | Should -Match 'Fixture.Other : its download had not finished'
+        $r.Output | Should -Match 'Fixture.App finished in \d+s \(exit 0\)'
+        $r.Output | Should -Match 'Fixture.Other finished in \d+s \(exit 0\), second lane'
+        $r.Output | Should -Match 'Downloaded ahead: 0 of 2'
     }
     It 'keeps genuine installer failures as errors' {
         $r = Invoke-FakeWinget pending

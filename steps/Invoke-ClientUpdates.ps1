@@ -21,9 +21,11 @@ $specs = @(
     @{ Name='JD'; Tag='jdownloader'; Script='Update-JDownloader.ps1'; Skip=$skipJDownloader },
     @{ Name='STEAM'; Tag='steam'; Script='Update-SteamGames.ps1'; Skip=$env:DASHBOARD_SKIP_STEAM },
     # G HUB's own updater service (steps\Update-GHub.ps1); no package manager involved.
-    @{ Name='GHUB'; Tag='ghub'; Script='Update-GHub.ps1'; Skip=$skipJDownloader }
+    @{ Name='GHUB'; Tag='ghub'; Script='Update-GHub.ps1'; Skip=$skipJDownloader },
+    # RustDesk from its signed GitHub release; winget has no package for it.
+    @{ Name='RUSTDESK'; Tag='rustdesk'; Script='Update-RustDesk.ps1'; Skip=$skipJDownloader }
 )
-$results = [ordered]@{ STORE='skipped'; JD='skipped'; STEAM='skipped'; GHUB='skipped' }
+$results = [ordered]@{ STORE='skipped'; JD='skipped'; STEAM='skipped'; GHUB='skipped'; RUSTDESK='skipped' }
 if ($PidFile) {
     # The start time disambiguates a PID the OS may have recycled.
     $self = Get-Process -Id $PID

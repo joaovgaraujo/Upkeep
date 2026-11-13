@@ -130,13 +130,10 @@ pub struct DashboardApp {
     run_start: Option<Instant>,
     last_output: Option<Instant>,
 
-    // Run progress estimate (0-100), driven by [tag] milestones plus
-    // intra-phase hints; creeps asymptotically toward the current phase
-    // ceiling between markers so the bar never looks frozen.
+    // Run progress (0-100): elapsed time against the time the run probably
+    // still needs, from earlier runs' phase lengths (crate::progress).
     progress: f32,
-    progress_ceiling: f32,
-    milestones: Vec<Milestone>,
-    milestone_idx: usize,
+    tracker: Option<crate::progress::Tracker>,
 
     // Bundle chooser (preset app list with per-app selection)
     bundle_preset: Option<String>,
@@ -341,9 +338,7 @@ impl DashboardApp {
             run_start: None,
             last_output: None,
             progress: 0.0,
-            progress_ceiling: 0.0,
-            milestones: Vec::new(),
-            milestone_idx: 0,
+            tracker: None,
             bundle_preset: None,
             bundle_apps,
             log_lines: VecDeque::new(),
@@ -515,7 +510,9 @@ impl DashboardApp {
                         // Real summary = the run's work is done; only the
                         // bat's trailing countdown remains.
                         self.progress = self.progress.max(99.0);
-                        self.progress_ceiling = 100.0;
+                        if let Some(t) = self.tracker.as_mut() {
+                            t.summary_seen();
+                        }
                     }
                 }
                 AppEvent::EngineExited(exit) => {
@@ -530,7 +527,9 @@ impl DashboardApp {
                     // produced no summary" banner.
                     if self.summary.is_some() {
                         self.progress = 100.0;
-                        self.progress_ceiling = 100.0;
+                        if let Some(t) = self.tracker.as_mut() {
+                            t.finish();
+                        }
                     }
                     self.finalize_categories();
                     self.send_toast();
@@ -925,17 +924,25 @@ impl DashboardApp {
         self.toast_sent = false;
         self.last_error = None;
 
-        // Build the progress plan from the checked categories.
-        self.milestones = build_milestones(
+        // Build the progress model from the checked categories and the
+        // phase lengths of the last completed runs.
+        let history = std::env::var_os("USERPROFILE")
+            .map(|p| {
+                crate::progress::History::load(
+                    &Path::new(&p).join("Documents").join("SystemUpdateLogs"),
+                    5,
+                )
+            })
+            .unwrap_or_default();
+        self.tracker = Some(crate::progress::Tracker::new(
+            &history,
             self.cat_windows_update,
             self.cat_feature_update,
             self.cat_store,
             self.cat_apps,
             self.cat_steam,
-        );
-        self.milestone_idx = 0;
+        ));
         self.progress = 0.0;
-        self.progress_ceiling = self.milestones.first().map_or(100.0, |m| m.end);
 
         if invoke_engine {
             self.log_lines.clear();
@@ -980,40 +987,11 @@ impl DashboardApp {
         }
     }
 
-    /// Advances the 0-100 progress estimate from an engine output line.
-    /// A `[tag]` matching a milestone at-or-after the current one jumps the
-    /// bar to that milestone; a raw winget "(i/n)" counter interpolates
-    /// inside the winget phase.
+    /// Feeds an engine output line to the progress model.
     fn advance_progress(&mut self, line: &str) {
-        let (tag, _) = extract_tag(line);
-        if let Some(tag) = tag {
-            if let Some(j) = self
-                .milestones
-                .iter()
-                .enumerate()
-                .skip(self.milestone_idx)
-                .find(|(_, m)| m.tag == tag)
-                .map(|(j, _)| j)
-            {
-                let m = &self.milestones[j];
-                self.milestone_idx = j;
-                self.progress = self.progress.max(m.start);
-                self.progress_ceiling = m.end;
-            }
-            return;
-        }
-
-        // Untagged line: winget's own "(i/n) Found ..." counter is the one
-        // reliable intra-phase signal.
-        if let Some(m) = self.milestones.get(self.milestone_idx) {
-            if m.tag == "winget" {
-                if let Some((i, n)) = parse_counter(line) {
-                    if n > 0 {
-                        let frac = (i as f32 / n as f32).clamp(0.0, 1.0);
-                        self.progress = self.progress.max(m.start + frac * (m.end - m.start));
-                    }
-                }
-            }
+        let now = self.run_start.map_or(0.0, |s| s.elapsed().as_secs_f32());
+        if let Some(t) = self.tracker.as_mut() {
+            t.on_line(line, now);
         }
     }
 
@@ -1244,78 +1222,6 @@ impl DashboardApp {
             }
         }
     }
-}
-
-/// One phase of the run for the progress estimate: the `[tag]` that starts
-/// it and the cumulative 0-100 range it covers.
-#[derive(Debug, Clone)]
-struct Milestone {
-    tag: &'static str,
-    start: f32,
-    end: f32,
-}
-
-/// Builds the milestone plan for the checked categories, normalized to 100.
-/// Weights are rough relative durations observed in real runs; the raw
-/// (untagged) topgrade output is folded into the winget phase's weight.
-/// The independent clients share one final phase because they overlap.
-fn build_milestones(
-    wu: bool,
-    feature: bool,
-    store: bool,
-    apps: bool,
-    steam: bool,
-) -> Vec<Milestone> {
-    let mut plan: Vec<(&'static str, f32)> = vec![("setup", 3.0)];
-    if apps {
-        plan.push(("launch", 1.0));
-        plan.push(("winget", 32.0)); // includes the raw topgrade output
-    }
-    if wu {
-        plan.push(("winupdate", 24.0));
-    }
-    // The enablement package itself is seconds; a missing prerequisite
-    // cumulative update is what makes this phase long.
-    if feature {
-        plan.push(("featureupdate", 14.0));
-    }
-    // The client lane (store/jdownloader/steam) now runs in parallel with the
-    // serial lane, so its tags arrive interleaved from the very start. Phase
-    // matching only ever moves forward, so giving it a phase here would let an
-    // early [steam] line jump the bar to the end and freeze it there. It only
-    // gets a phase when it is the whole run.
-    let serial_work = apps || wu || feature;
-    if (store || apps || steam) && !serial_work {
-        let weight = if steam {
-            16.0
-        } else if store {
-            12.0
-        } else {
-            4.0
-        };
-        plan.push(("clients", weight));
-    }
-
-    let total: f32 = plan.iter().map(|(_, w)| w).sum();
-    let mut out = Vec::with_capacity(plan.len());
-    let mut acc = 0.0;
-    for (tag, w) in plan {
-        let start = acc / total * 100.0;
-        acc += w;
-        let end = acc / total * 100.0;
-        out.push(Milestone { tag, start, end });
-    }
-    out
-}
-
-/// Parses winget's "(i/n) Found ..." progress counter from a raw line.
-fn parse_counter(line: &str) -> Option<(u32, u32)> {
-    let t = line.trim_start();
-    let rest = t.strip_prefix('(')?;
-    let close = rest.find(')')?;
-    let inner = &rest[..close];
-    let (a, b) = inner.split_once('/')?;
-    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
 }
 
 /// One selectable app inside the bundle-chooser dialog.
@@ -1579,16 +1485,11 @@ impl DashboardApp {
 
         if self.is_running {
             ctx.request_repaint_after(Duration::from_millis(250));
-            // Creep the progress bar toward the current phase ceiling so it
-            // keeps moving between milestones. Time-based (stable_dt is the
-            // egui-documented animation delta) so extra repaints from mouse
-            // movement don't accelerate the bar: exponential approach with a
-            // ~15 s time constant, never overshooting.
-            let dt = ctx.input(|i| i.stable_dt).min(0.1);
-            let alpha = 1.0 - (-dt / 15.0).exp();
-            self.progress = (self.progress_ceiling - self.progress)
-                .max(0.0)
-                .mul_add(alpha, self.progress);
+            // Time moves the bar: elapsed against the expected remainder.
+            let now = self.run_start.map_or(0.0, |s| s.elapsed().as_secs_f32());
+            if let Some(t) = self.tracker.as_mut() {
+                self.progress = self.progress.max(t.fraction(now) * 100.0);
+            }
         }
 
         self.draw_top_banner(ctx);
@@ -2811,11 +2712,21 @@ impl DashboardApp {
                 );
                 if self.is_running {
                     ui.horizontal_wrapped(|ui| {
-                        if let Some(m) = self.milestones.get(self.milestone_idx) {
+                        if let Some(tr) = self.tracker.as_ref() {
+                            let now = self.run_start.map_or(0.0, |s| s.elapsed().as_secs_f32());
+                            let left = tr.remaining(now);
+                            let eta = if left < 60.0 {
+                                t.progress_eta_under_minute.to_string()
+                            } else {
+                                t.progress_eta_minutes
+                                    .replace("{}", &format!("{:.0}", (left / 60.0).ceil()))
+                            };
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{} {}",
-                                    t.progress_phase_prefix, m.tag
+                                    "{} {} · {}",
+                                    t.progress_phase_prefix,
+                                    tr.phase(),
+                                    eta
                                 ))
                                 .small()
                                 .color(theme::subtle_text()),
@@ -5705,56 +5616,5 @@ mod tests {
             assert!(app.selected_update_ids.is_none());
         }
         assert!(app.update_plan.is_none());
-    }
-
-    #[test]
-    fn milestones_are_monotonic_and_end_at_100() {
-        for (wu, feature, store, apps, steam) in [
-            (true, true, true, true, true),
-            (true, false, false, false, false),
-            (false, true, false, false, false),
-            (false, false, true, false, false),
-            (false, false, false, true, true),
-            (false, false, false, true, false),
-        ] {
-            let plan = build_milestones(wu, feature, store, apps, steam);
-            assert!(!plan.is_empty());
-            let mut prev_end = 0.0_f32;
-            for m in &plan {
-                assert!(m.start >= prev_end - 0.001, "monotonic starts: {plan:?}");
-                assert!(m.end > m.start, "non-empty span: {plan:?}");
-                prev_end = m.end;
-            }
-            assert!(
-                (plan.last().unwrap().end - 100.0).abs() < 0.001,
-                "normalized to 100: {plan:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn milestones_skip_unchecked_categories() {
-        let plan = build_milestones(true, false, false, false, false);
-        assert!(plan.iter().all(|m| m.tag != "store" && m.tag != "winget"));
-        assert!(plan.iter().any(|m| m.tag == "winupdate"));
-        assert!(plan.iter().all(|m| m.tag != "featureupdate"));
-        let plan = build_milestones(false, true, false, false, false);
-        assert!(plan.iter().any(|m| m.tag == "featureupdate"));
-
-        // The client lane overlaps the serial lane, so it must not own a phase
-        // whenever there is serial work to track.
-        let plan = build_milestones(true, false, true, false, true);
-        assert!(plan.iter().all(|m| m.tag != "clients"));
-        let plan = build_milestones(false, false, true, false, true);
-        assert!(plan.iter().any(|m| m.tag == "clients"));
-    }
-
-    #[test]
-    fn parse_counter_reads_winget_progress() {
-        assert_eq!(parse_counter("(1/6) Found Subtitle Edit"), Some((1, 6)));
-        assert_eq!(parse_counter("  (12/30) Found X"), Some((12, 30)));
-        assert_eq!(parse_counter("no counter here"), None);
-        assert_eq!(parse_counter("(abc/def) nope"), None);
-        assert_eq!(parse_counter("(1) nope"), None);
     }
 }

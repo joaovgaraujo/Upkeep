@@ -145,6 +145,12 @@ needs it. That has consequences worth understanding:
   update from the engine's own process instead, as the same account. Over SSH,
   the hand-off to the desktop session no longer starts Windows PowerShell in
   the SSH session, so it starts in a second instead of waiting on the drives.
+- **No more waiting on a stuck download; RustDesk updates (1.9.3).** A
+  download that winget starts ahead of time and that never finishes is stopped
+  after 5 minutes, and winget downloads that package during the install. The
+  end of the winget step no longer waits on it. RustDesk, which winget has no
+  package for, updates from its signed GitHub release. The progress bar follows
+  how long your earlier runs took and shows the time left.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

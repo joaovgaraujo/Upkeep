@@ -11,6 +11,7 @@ pub mod engine;
 pub mod i18n;
 pub mod optimize;
 pub mod pins;
+pub mod progress;
 pub mod reboot;
 pub mod self_update;
 pub mod session_log;

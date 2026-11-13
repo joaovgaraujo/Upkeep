@@ -252,6 +252,9 @@ pub struct Strings {
 
     // -- Progress -----------------------------------------------------------
     pub progress_phase_prefix: &'static str,
+    /// "{}" is the number of minutes.
+    pub progress_eta_minutes: &'static str,
+    pub progress_eta_under_minute: &'static str,
 
     // -- Pins tab -----------------------------------------------------------
     pub pins_intro: &'static str,
@@ -517,6 +520,8 @@ pub static EN: Strings = Strings {
     bundle_load_failed_prefix: "Could not load app bundle:",
 
     progress_phase_prefix: "Phase:",
+    progress_eta_minutes: "about {} min left",
+    progress_eta_under_minute: "under a minute left",
 
     pins_intro: "Pinned packages are excluded from winget/choco updates.",
     pins_col_package_id: "Package ID",
@@ -777,6 +782,8 @@ pub static PT_BR: Strings = Strings {
     bundle_load_failed_prefix: "N\u{e3}o foi poss\u{ed}vel carregar o pacote de apps:",
 
     progress_phase_prefix: "Fase:",
+    progress_eta_minutes: "faltam cerca de {} min",
+    progress_eta_under_minute: "falta menos de um minuto",
 
     pins_intro: "Os pacotes fixados s\u{e3}o exclu\u{ed}dos das atualiza\u{e7}\u{f5}es do winget/choco.",
     pins_col_package_id: "ID do Pacote",
