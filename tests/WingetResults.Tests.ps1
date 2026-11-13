@@ -379,7 +379,9 @@ Describe 'Apps winget cannot update here are reported, not failed' {
     It 'reads the table when Available and Source are one space apart' {
         $r = Invoke-FakeWinget tight-source
         $r.Code | Should -Be 0
-        $json = @($r.Output.Trim() | ConvertFrom-Json)
+        # Not piped: Windows PowerShell 5.1 pipes a JSON array as one object.
+        $parsed = ConvertFrom-Json ($r.Output.Trim())
+        $json = @($parsed)
         $json.Count | Should -Be 3
         ($json | Where-Object Id -eq 'Telegram.TelegramDesktop').Available | Should -Be '7.4.3'
         ($json | Where-Object Id -eq 'GlennDelahoy.SnappyDriverInstallerOrigin').Available | Should -Be '2.0.7.890'
