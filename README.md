@@ -155,6 +155,10 @@ needs it. That has consequences worth understanding:
   where two column labels sit one space apart no longer reads as nothing
   pending. Skills the `skills` CLI tracks are left to topgrade's Skills step,
   and files in the skills folder your account can't open get their access back.
+- **Startup items stay the way you set them (1.9.5).** The Scheduled tasks tab
+  lists every app's task with when it runs. Startup and Scheduled tasks each
+  have a button that turns off everything marked safe to turn off. What you
+  turn off there is turned off again after app updates that re-enable it.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

@@ -15,7 +15,8 @@
     The installer also installs and starts the RustDesk service, and starts
     RustDesk. Whatever was not there before is put back: a service that did
     not exist is removed, a service keeps its start type, new startup entries
-    are removed, and RustDesk processes that were not running are closed.
+    are removed (Run keys and Startup-folder shortcuts), and RustDesk
+    processes that were not running are closed.
 
     While someone is connected to this PC through RustDesk (its connection
     manager, `--cm`, is running), the update is not installed: it would end
@@ -60,6 +61,14 @@ function Get-RunEntries {
         }
     }
     $found
+}
+# Shortcuts in the Startup folders. The 1.5.3 installer added
+# "RustDesk Tray.lnk" to the all-users Startup folder (2026-11-13), which the
+# Run-key check missed, so RustDesk started at the next sign-in.
+function Get-StartupShortcuts {
+    @(foreach ($f in [Environment]::GetFolderPath('CommonStartup'), [Environment]::GetFolderPath('Startup')) {
+            Get-ChildItem -LiteralPath $f -Filter '*.lnk' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '(?i)rustdesk' } | ForEach-Object { $_.FullName }
+        })
 }
 function Get-RustDeskProcesses {
     @(Get-CimInstance Win32_Process -Filter "Name = 'rustdesk.exe'" -ErrorAction SilentlyContinue)
@@ -114,6 +123,7 @@ $svcBefore = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 $svcType = if ($svcBefore) { "$($svcBefore.StartType)" } else { '' }
 $svcStatus = if ($svcBefore) { "$($svcBefore.Status)" } else { '' }
 $runBefore = @(Get-RunEntries | ForEach-Object { "$($_.Key)|$($_.Name)" })
+$linksBefore = @(Get-StartupShortcuts)
 $procBefore = @(Get-RustDeskProcesses | ForEach-Object { $_.ProcessId })
 try {
     Write-Host "[rustdesk] Downloading $($asset.name) ($([math]::Round($asset.size / 1MB, 1)) MB)..."
@@ -169,6 +179,12 @@ try {
         if ($runBefore -notcontains "$($e.Key)|$($e.Name)") {
             Remove-ItemProperty -LiteralPath $e.Key -Name $e.Name -ErrorAction SilentlyContinue
             Write-Host "[rustdesk] Removed the startup entry the installer added ($($e.Name))."
+        }
+    }
+    foreach ($l in @(Get-StartupShortcuts)) {
+        if ($linksBefore -notcontains $l) {
+            Remove-Item -LiteralPath $l -Force -ErrorAction SilentlyContinue
+            Write-Host "[rustdesk] Removed the startup shortcut the installer added ($(Split-Path $l -Leaf))."
         }
     }
     foreach ($proc in @(Get-RustDeskProcesses)) {

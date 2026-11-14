@@ -471,6 +471,13 @@ echo [discord] Re-checking Discord run-at-startup after launch...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Disable-DiscordAutostart.ps1"
 )
 
+rem -- Startup choices made in Upkeep, after the updates -------------------
+rem    Installers turn their own startup items back on (a winget update of
+rem    Tailscale set its service back to Automatic, 2026-11-13).
+rem    steps\Restore-StartupChoices.ps1 puts back what was turned off on the
+rem    Startup and Services page (LOCALAPPDATA\Upkeep\startup-choices.json).
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Restore-StartupChoices.ps1" -LogFile "%LOGFILE%"
+
 rem -- Summary --------------------------------------------------------------
 if "%DASHBOARD_SKIP_APPS%"=="1" (
     set "TOPGRADE_STATUS=skipped"

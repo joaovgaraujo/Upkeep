@@ -154,6 +154,11 @@ vale entender:
   mais lida como nada pendente. Skills que o CLI `skills` acompanha ficam com
   a etapa Skills do topgrade, e arquivos da pasta de skills que a sua conta
   não consegue abrir têm o acesso devolvido.
+- **Itens de inicialização ficam como você deixou (1.9.5).** A aba Tarefas
+  agendadas lista a tarefa de cada app e quando ela roda. Inicialização e
+  Tarefas agendadas têm um botão que desliga tudo o que pode ser desligado. O
+  que você desliga ali é desligado de novo depois de atualizações de apps que
+  o religam.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

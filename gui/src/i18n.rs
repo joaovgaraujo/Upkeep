@@ -297,6 +297,12 @@ pub struct Strings {
     pub tasks_col_path: &'static str,
     pub time_col: &'static str,
     pub what_col: &'static str,
+    pub when_col: &'static str,
+    pub bulk_off_hover: &'static str,
+    pub bulk_off_title: &'static str,
+    pub bulk_off_intro: &'static str,
+    pub bulk_off_confirm: &'static str,
+    pub kept_off_hover: &'static str,
     pub system_export_button: &'static str,
     pub system_export_hover: &'static str,
     pub system_advanced_label: &'static str,
@@ -556,12 +562,18 @@ pub static EN: Strings = Strings {
     sort_status: "On/Off",
     sort_advice: "Advice",
     tab_tasks: "Scheduled tasks",
-    tasks_intro: "Scheduled tasks that fire at boot or sign-in, mostly updaters and helpers apps register for themselves. The switch uses Windows' own enable/disable for tasks; nothing is deleted.",
+    tasks_intro: "Tasks that apps scheduled for themselves, whatever starts them, and Windows' own tasks that run at boot or sign-in. 'When' says when each one runs. The switch uses Windows' own enable/disable for tasks. Nothing is deleted, and Upkeep keeps what you turn off off after app updates.",
     tasks_open_scheduler: "Open Task Scheduler",
     tasks_loading: "Reading scheduled tasks...",
     tasks_col_path: "Folder",
     time_col: "Time",
     what_col: "What it does",
+    when_col: "When",
+    bulk_off_hover: "Turns off every item on this tab marked 'Safe to turn off'. You see the list first.",
+    bulk_off_title: "Turn these off?",
+    bulk_off_intro: "These are marked 'Safe to turn off': updaters, telemetry and preloaders that nothing needs at sign-in. Upkeep keeps them off after app updates. You can turn any of them back on here.",
+    bulk_off_confirm: "Turn them off",
+    kept_off_hover: "You turned this off in Upkeep. If an app update turns it back on, Upkeep's next update run turns it off again.",
     system_export_button: "\u{1F4C4} Export report (.md)",
     system_export_hover: "Writes StartupReport.md with every startup program, scheduled task and service, including the file each one launches, so you can research items one by one.",
     system_advanced_label: "Advanced",
@@ -573,7 +585,7 @@ pub static EN: Strings = Strings {
     services_col_state: "Status",
     services_col_start: "Start type",
     services_loading: "Reading services...",
-    startup_intro: "Programs that launch automatically with Windows. Use the On/Off switch to stop one. It uses the same mechanism as Task Manager, deletes nothing, and is reversible. Hover a name to see where it comes from.",
+    startup_intro: "Programs that launch automatically with Windows. Use the On/Off switch to stop one. It uses the same mechanism as Task Manager, deletes nothing, and is reversible. Upkeep keeps what you turn off off, even when an app update turns it back on. Hover a name to see where it comes from.",
     startup_open_settings: "Open Startup settings",
     startup_col_name: "Name",
     startup_col_location: "Location",
@@ -818,12 +830,18 @@ pub static PT_BR: Strings = Strings {
     sort_status: "Liga/Desliga",
     sort_advice: "Recomenda\u{e7}\u{e3}o",
     tab_tasks: "Tarefas agendadas",
-    tasks_intro: "Tarefas agendadas que disparam no boot ou no login, em geral atualizadores e auxiliares que os pr\u{f3}prios apps registram. O interruptor usa o ativar/desativar do pr\u{f3}prio Windows; nada \u{e9} apagado.",
+    tasks_intro: "Tarefas que os apps agendaram para si mesmos, seja qual for o gatilho, e tarefas do pr\u{f3}prio Windows que rodam no boot ou no login. 'Quando' diz quando cada uma roda. O interruptor usa o ativar/desativar do pr\u{f3}prio Windows. Nada \u{e9} apagado, e o Upkeep mant\u{e9}m desligado o que voc\u{ea} desligar, mesmo depois de atualiza\u{e7}\u{f5}es dos apps.",
     tasks_open_scheduler: "Abrir Agendador de Tarefas",
     tasks_loading: "Lendo tarefas agendadas...",
     tasks_col_path: "Pasta",
     time_col: "Tempo",
     what_col: "O que faz",
+    when_col: "Quando",
+    bulk_off_hover: "Desliga todos os itens desta aba marcados como 'Pode desligar'. Voc\u{ea} v\u{ea} a lista antes.",
+    bulk_off_title: "Desligar estes?",
+    bulk_off_intro: "Estes est\u{e3}o marcados como 'Pode desligar': atualizadores, telemetria e pr\u{e9}-carregadores de que nada precisa no login. O Upkeep os mant\u{e9}m desligados depois das atualiza\u{e7}\u{f5}es dos apps. D\u{e1} para religar qualquer um aqui.",
+    bulk_off_confirm: "Desligar",
+    kept_off_hover: "Voc\u{ea} desligou isto no Upkeep. Se uma atualiza\u{e7}\u{e3}o de app religar, a pr\u{f3}xima execu\u{e7}\u{e3}o do Upkeep desliga de novo.",
     system_export_button: "\u{1F4C4} Exportar relat\u{f3}rio (.md)",
     system_export_hover: "Gera o StartupReport.md com todos os programas de inicializa\u{e7}\u{e3}o, tarefas agendadas e servi\u{e7}os, incluindo o arquivo que cada um executa, para voc\u{ea} pesquisar item por item.",
     system_advanced_label: "Avan\u{e7}ado",
@@ -835,7 +853,7 @@ pub static PT_BR: Strings = Strings {
     services_col_state: "Status",
     services_col_start: "Tipo de in\u{ed}cio",
     services_loading: "Lendo servi\u{e7}os...",
-    startup_intro: "Programas que iniciam automaticamente com o Windows. Use o interruptor Liga/Desliga para impedir um deles. \u{c9} o mesmo mecanismo do Gerenciador de Tarefas, nada \u{e9} apagado e d\u{e1} para reverter. Passe o mouse sobre o nome para ver de onde ele vem.",
+    startup_intro: "Programas que iniciam automaticamente com o Windows. Use o interruptor Liga/Desliga para impedir um deles. \u{c9} o mesmo mecanismo do Gerenciador de Tarefas, nada \u{e9} apagado e d\u{e1} para reverter. O Upkeep mant\u{e9}m desligado o que voc\u{ea} desligar, mesmo que uma atualiza\u{e7}\u{e3}o de app o religue. Passe o mouse sobre o nome para ver de onde ele vem.",
     startup_open_settings: "Abrir configura\u{e7}\u{f5}es de Inicializa\u{e7}\u{e3}o",
     startup_col_name: "Nome",
     startup_col_location: "Local",
@@ -1038,6 +1056,111 @@ pub fn runs_at_signin(lang: Lang, exe: &str) -> String {
     }
 }
 
+/// "Turn off N safe-to-turn-off items" button label.
+pub fn bulk_off_button(lang: Lang, n: usize) -> String {
+    match lang {
+        Lang::En => format!("Turn off {n} safe-to-turn-off"),
+        Lang::PtBr => format!("Desligar {n} que podem desligar"),
+    }
+}
+
+/// When a scheduled task runs, from its trigger codes (system::TaskEntry::when).
+pub fn task_when(lang: Lang, codes: &[String]) -> String {
+    let pt = lang == Lang::PtBr;
+    let parts: Vec<String> = codes
+        .iter()
+        .map(|code| {
+            let (base, every) = match code.split_once("+every:") {
+                Some((b, e)) => (b, Some(iso_interval(e, pt))),
+                None => (code.as_str(), None),
+            };
+            let at = |prefix: &str| base.strip_prefix(prefix).filter(|t| !t.is_empty());
+            let head = match base {
+                "logon" => (if pt { "No login" } else { "At sign-in" }).to_string(),
+                "boot" => (if pt { "No boot" } else { "At boot" }).to_string(),
+                "idle" => (if pt { "Com o PC ocioso" } else { "When idle" }).to_string(),
+                "event" => (if pt {
+                    "Num evento do sistema"
+                } else {
+                    "On a system event"
+                })
+                .to_string(),
+                "session" => (if pt {
+                    "Ao bloquear/desbloquear"
+                } else {
+                    "On lock/unlock"
+                })
+                .to_string(),
+                "registration" => (if pt { "Ao ser criada" } else { "When created" }).to_string(),
+                "once" if every.is_some() => String::new(),
+                "once" => (if pt { "Uma vez" } else { "Once" }).to_string(),
+                b if b.starts_with("daily@") => match at("daily@") {
+                    Some(t) if pt => format!("Todo dia \u{e0}s {t}"),
+                    Some(t) => format!("Daily at {t}"),
+                    None => (if pt { "Todo dia" } else { "Daily" }).to_string(),
+                },
+                b if b.starts_with("weekly@") => match at("weekly@") {
+                    Some(t) if pt => format!("Toda semana \u{e0}s {t}"),
+                    Some(t) => format!("Weekly at {t}"),
+                    None => (if pt { "Toda semana" } else { "Weekly" }).to_string(),
+                },
+                _ => (if pt { "Outro gatilho" } else { "Other trigger" }).to_string(),
+            };
+            match (head.is_empty(), every) {
+                (true, Some(e)) => e,
+                (false, Some(e)) => format!("{head}, {}", lower_first(&e)),
+                (_, None) => head,
+            }
+        })
+        .collect();
+    parts.join("; ")
+}
+
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
+/// "Every 11 h" from an ISO 8601 duration such as PT11H, P1D or PT30M.
+fn iso_interval(iso: &str, pt: bool) -> String {
+    let (mut days, mut hours, mut mins) = (0u64, 0u64, 0u64);
+    let mut num = String::new();
+    let mut in_time = false;
+    for c in iso.chars() {
+        match c {
+            'T' => in_time = true,
+            '0'..='9' => num.push(c),
+            'D' => days = std::mem::take(&mut num).parse().unwrap_or(0),
+            'H' => hours = std::mem::take(&mut num).parse().unwrap_or(0),
+            'M' if in_time => mins = std::mem::take(&mut num).parse().unwrap_or(0),
+            _ => num.clear(),
+        }
+    }
+    let span = match (days, hours, mins) {
+        (1, 0, 0) => return (if pt { "Todo dia" } else { "Every day" }).to_string(),
+        (d, 0, 0) if d > 1 => {
+            if pt {
+                format!("{d} dias")
+            } else {
+                format!("{d} days")
+            }
+        }
+        (0, 1, 0) => return (if pt { "De hora em hora" } else { "Every hour" }).to_string(),
+        (0, h, 0) if h > 1 => format!("{h} h"),
+        (0, 0, 1) => return (if pt { "A cada minuto" } else { "Every minute" }).to_string(),
+        (0, 0, m) if m > 1 => format!("{m} min"),
+        _ => return iso.to_string(),
+    };
+    if pt {
+        format!("A cada {span}")
+    } else {
+        format!("Every {span}")
+    }
+}
+
 /// Localized "N protected items hidden" note for the System tables.
 pub fn hidden_items(lang: Lang, n: usize) -> String {
     match lang {
@@ -1144,5 +1267,33 @@ mod tests {
         assert_eq!(EN.tab_log, PT_BR.tab_log);
         assert_eq!(EN.tab_pins, PT_BR.tab_pins);
         assert_eq!(EN.cat_drivers, PT_BR.cat_drivers);
+    }
+}
+
+#[cfg(test)]
+mod task_when_tests {
+    use super::*;
+
+    fn w(codes: &[&str]) -> Vec<String> {
+        codes.iter().map(|c| c.to_string()).collect()
+    }
+
+    #[test]
+    fn describes_task_triggers() {
+        assert_eq!(
+            task_when(Lang::En, &w(&["logon", "once+every:PT11H"])),
+            "At sign-in; Every 11 h"
+        );
+        assert_eq!(task_when(Lang::En, &w(&["daily@10:16"])), "Daily at 10:16");
+        assert_eq!(
+            task_when(Lang::En, &w(&["logon+every:PT1M"])),
+            "At sign-in, every minute"
+        );
+        assert_eq!(task_when(Lang::En, &w(&["once+every:P1D"])), "Every day");
+        assert_eq!(
+            task_when(Lang::PtBr, &w(&["boot", "once+every:PT7H"])),
+            "No boot; A cada 7 h"
+        );
+        assert_eq!(task_when(Lang::En, &w(&[])), "");
     }
 }

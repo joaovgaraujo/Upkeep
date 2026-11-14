@@ -59,7 +59,8 @@ impl StartupEntry {
     }
 }
 
-/// One scheduled task that fires at boot or logon.
+/// One scheduled task: an app's own task (any trigger), or a Windows task
+/// that fires at boot or logon.
 #[derive(Debug, Clone)]
 pub struct TaskEntry {
     pub path: String,
@@ -70,6 +71,11 @@ pub struct TaskEntry {
     pub command: String,
     /// The task's own (often localized) description, if the author set one.
     pub description: String,
+    /// When it runs, one language-neutral code per trigger (TASKS_SCRIPT):
+    /// `logon`, `boot`, `daily@10:16`, `weekly@09:00`, `once`, `idle`,
+    /// `event`, `session`, `registration`, `other`, each optionally followed
+    /// by `+every:<ISO 8601 interval>` (`logon+every:PT1M`).
+    pub when: Vec<String>,
 }
 
 impl TaskEntry {
@@ -514,21 +520,44 @@ pub fn set_startup_enabled(
 }
 
 // ---------------------------------------------------------------------------
-// Scheduled tasks (boot/logon triggers only — the ones that affect startup)
+// Scheduled tasks
 // ---------------------------------------------------------------------------
 
+// Every task outside \Microsoft\ (apps' own tasks, whatever starts them: a
+// task reopening a monitoring app every 11 hours showed up only as a
+// sign-in task, with nothing saying it also ran on a timer), plus Windows'
+// own tasks that fire at boot or logon.
 // Trigger type is matched via PSObject.TypeNames: on some systems the
 // CimClass property of trigger instances doesn't resolve inside script
 // blocks (observed live), while the type name always carries
 // ...MSFT_TaskLogonTrigger / MSFT_TaskBootTrigger.
 const TASKS_SCRIPT: &str = r#"
+function When($t) {
+    $n = $t.PSObject.TypeNames -join ' '
+    $code = switch -regex ($n) {
+        'LogonTrigger' { 'logon'; break }
+        'BootTrigger' { 'boot'; break }
+        'DailyTrigger' { 'daily@' + $(try { ([datetime]$t.StartBoundary).ToString('HH:mm') } catch { '' }); break }
+        'WeeklyTrigger' { 'weekly@' + $(try { ([datetime]$t.StartBoundary).ToString('HH:mm') } catch { '' }); break }
+        'IdleTrigger' { 'idle'; break }
+        'EventTrigger' { 'event'; break }
+        'SessionStateChangeTrigger' { 'session'; break }
+        'RegistrationTrigger' { 'registration'; break }
+        'TimeTrigger' { 'once'; break }
+        default { 'other' }
+    }
+    if ($t.Repetition -and $t.Repetition.Interval) { $code += '+every:' + $t.Repetition.Interval }
+    $code
+}
 Get-ScheduledTask | ForEach-Object {
-    $triggers = @($_.Triggers) | Where-Object { $_ -and ($_.PSObject.TypeNames -match 'LogonTrigger|BootTrigger') }
-    if (@($triggers).Count -gt 0) {
+    $all = @($_.Triggers) | Where-Object { $_ }
+    $startup = @($all | Where-Object { $_.PSObject.TypeNames -match 'LogonTrigger|BootTrigger' })
+    if ($startup.Count -gt 0 -or $_.TaskPath -notlike '\Microsoft\*') {
         $act = @($_.Actions) | Where-Object { $_.Execute } | Select-Object -First 1
         $cmd = if ($act) { ($act.Execute + ' ' + $act.Arguments).Trim() } else { '' }
         $desc = (([string]$_.Description) -replace "\s+", " ").Trim()
-        $_.TaskPath + [char]9 + $_.TaskName + [char]9 + $_.State + [char]9 + $cmd + [char]9 + $desc
+        $when = (@($all | ForEach-Object { When $_ }) -join ',')
+        $_.TaskPath + [char]9 + $_.TaskName + [char]9 + $_.State + [char]9 + $cmd + [char]9 + $desc + [char]9 + $when
     }
 }
 "#;
@@ -541,12 +570,20 @@ pub fn parse_tasks(text: &str) -> Vec<TaskEntry> {
     let mut out: Vec<TaskEntry> = text
         .lines()
         .filter_map(|l| {
-            let mut parts = l.splitn(5, '\t');
+            let mut parts = l.splitn(6, '\t');
             let path = parts.next()?.trim();
             let name = parts.next()?.trim();
             let state = parts.next().unwrap_or("").trim();
             let command = parts.next().unwrap_or("").trim();
             let description = parts.next().unwrap_or("").trim();
+            let when = parts
+                .next()
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|w| !w.is_empty())
+                .map(str::to_string)
+                .collect();
             if name.is_empty() {
                 return None;
             }
@@ -556,6 +593,7 @@ pub fn parse_tasks(text: &str) -> Vec<TaskEntry> {
                 state: state.to_string(),
                 command: command.to_string(),
                 description: description.to_string(),
+                when,
             })
         })
         .collect();
@@ -793,6 +831,15 @@ Truncated Name that is lo\u{2026} Some.Id                  1.0                  
         assert_eq!(tasks[1].path, "\\Microsoft\\Windows\\OneDrive\\");
         assert_eq!(tasks[1].command, "C:\\OneDrive.exe /run");
         assert_eq!(tasks[1].description, "Keeps OneDrive running.");
+        assert!(tasks[1].when.is_empty());
+    }
+
+    #[test]
+    fn parses_task_triggers() {
+        let text =
+            "\\\tSensor Restart\tReady\tpowershell.exe -File x.ps1\t\tlogon,once+every:PT11H\n";
+        let tasks = parse_tasks(text);
+        assert_eq!(tasks[0].when, vec!["logon", "once+every:PT11H"]);
     }
 
     #[test]

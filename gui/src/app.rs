@@ -49,7 +49,13 @@ enum Tab {
     DriverStore,
 }
 
-/// The two halves of the Startup & Services page.
+/// Items a "Turn off all safe-to-turn-off" click would turn off.
+enum BulkOff {
+    Startup(Vec<StartupEntry>),
+    Tasks(Vec<TaskEntry>),
+}
+
+/// The sections of the Startup & Services page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SystemSection {
     Startup,
@@ -233,6 +239,11 @@ pub struct DashboardApp {
     tasks_filter: String,
     /// A scheduled-task toggle in flight (task name).
     tasks_busy: Option<String>,
+    /// What was turned off on this page, kept off after app updates
+    /// (choices.rs; re-applied by steps\Restore-StartupChoices.ps1).
+    startup_choices: crate::choices::Choices,
+    /// "Turn off all safe-to-turn-off" waiting for confirmation.
+    bulk_off: Option<BulkOff>,
 
     /// Discovered preset packs: (slug, app count).
     presets: Vec<(String, usize)>,
@@ -409,6 +420,10 @@ impl DashboardApp {
             tasks_error: None,
             tasks_filter: String::new(),
             tasks_busy: None,
+            startup_choices: crate::choices::Choices::default_path()
+                .map(|p| crate::choices::Choices::load(&p))
+                .unwrap_or_default(),
+            bulk_off: None,
             presets,
             engine_stop: None,
             engine_finished: None,
@@ -603,6 +618,7 @@ impl DashboardApp {
                     match result {
                         Ok(list) => {
                             self.services = list;
+                            self.reload_startup_choices();
                             self.services_error = None;
                         }
                         Err(e) => self.services_error = Some(e),
@@ -614,6 +630,7 @@ impl DashboardApp {
                     match result {
                         Ok(list) => {
                             self.autostart_entries = list;
+                            self.reload_startup_choices();
                             self.autostart_error = None;
                         }
                         Err(e) => self.autostart_error = Some(e),
@@ -625,6 +642,7 @@ impl DashboardApp {
                     match result {
                         Ok(list) => {
                             self.tasks = list;
+                            self.reload_startup_choices();
                             self.tasks_error = None;
                         }
                         Err(e) => self.tasks_error = Some(e),
@@ -3022,6 +3040,7 @@ impl DashboardApp {
             SystemSection::Tasks => self.draw_tasks_section(ui, ctx),
             SystemSection::Services => self.draw_services_section(ui, ctx),
         }
+        self.draw_bulk_off_dialog(ctx);
     }
 
     /// Scheduled tasks with boot/logon triggers — the ones that slow down
@@ -3042,6 +3061,25 @@ impl DashboardApp {
             }
             if ui.button(t.tasks_open_scheduler).clicked() {
                 open_windows_target("taskschd.msc");
+            }
+            let safe_off: Vec<TaskEntry> = self
+                .tasks
+                .iter()
+                .filter(|s| {
+                    s.enabled() && matches!(task_advice(s).map(|e| e.advice), Some(Advice::SafeOff))
+                })
+                .cloned()
+                .collect();
+            if !safe_off.is_empty()
+                && ui
+                    .add_enabled(
+                        self.tasks_busy.is_none(),
+                        egui::Button::new(i18n::bulk_off_button(self.lang, safe_off.len())),
+                    )
+                    .on_hover_text(t.bulk_off_hover)
+                    .clicked()
+            {
+                self.bulk_off = Some(BulkOff::Tasks(safe_off));
             }
             if self.tasks_loading {
                 ui.add(egui::Spinner::new());
@@ -3107,6 +3145,7 @@ impl DashboardApp {
             }
         });
         let busy = self.tasks_busy.clone();
+        let kept = self.startup_choices.clone();
         let mut toggle: Option<TaskEntry> = None;
 
         egui::ScrollArea::vertical()
@@ -3117,7 +3156,8 @@ impl DashboardApp {
                     .column(egui_extras::Column::initial(108.0).at_least(72.0))
                     .column(egui_extras::Column::initial(148.0).at_least(96.0))
                     .column(egui_extras::Column::initial(70.0).at_least(52.0))
-                    .column(egui_extras::Column::initial(280.0).at_least(160.0))
+                    .column(egui_extras::Column::initial(240.0).at_least(140.0))
+                    .column(egui_extras::Column::initial(150.0).at_least(90.0))
                     .column(egui_extras::Column::remainder().at_least(180.0))
                     .header(20.0, |mut header| {
                         header.col(|ui| {
@@ -3131,6 +3171,9 @@ impl DashboardApp {
                         });
                         header.col(|ui| {
                             sort_header(ui, t.startup_col_name, SortField::Name, &mut sort);
+                        });
+                        header.col(|ui| {
+                            ui.strong(t.when_col);
                         });
                         header.col(|ui| {
                             ui.strong(t.what_col);
@@ -3152,7 +3195,11 @@ impl DashboardApp {
                                     egui::RichText::new(label).strong().color(color),
                                 )
                                 .min_size(egui::vec2(72.0, 20.0));
-                                if ui.add_enabled(busy.is_none(), button).clicked() {
+                                let mut resp = ui.add_enabled(busy.is_none(), button);
+                                if !s.enabled() && kept.keeps_task(s) {
+                                    resp = resp.on_hover_text(t.kept_off_hover);
+                                }
+                                if resp.clicked() {
                                     toggle = Some(s.clone());
                                 }
                             });
@@ -3172,6 +3219,13 @@ impl DashboardApp {
                                 };
                                 ui.add(egui::Label::new(text).truncate())
                                     .on_hover_text(format!("{}{}", s.path, s.name));
+                            });
+                            row.col(|ui| {
+                                let when = i18n::task_when(lang, &s.when);
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(&when).small()).truncate(),
+                                )
+                                .on_hover_text(&when);
                             });
                             row.col(|ui| {
                                 // Curated note > the task's own description >
@@ -3206,6 +3260,12 @@ impl DashboardApp {
         }
     }
 
+    fn reload_startup_choices(&mut self) {
+        if let Some(p) = crate::choices::Choices::default_path() {
+            self.startup_choices = crate::choices::Choices::load(&p);
+        }
+    }
+
     /// Applies a scheduled-task enable/disable in the background, then
     /// re-queries the list.
     fn spawn_toggle_task(&mut self, ctx: &egui::Context, entry: TaskEntry) {
@@ -3213,11 +3273,19 @@ impl DashboardApp {
         let tx = self.tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            if let Err(e) = system::set_task_enabled(&entry.path, &entry.name, !entry.enabled()) {
-                let _ = tx.send(AppEvent::Error(format!(
-                    "Task toggle '{}' failed: {e}",
-                    entry.name
-                )));
+            let enable = !entry.enabled();
+            match system::set_task_enabled(&entry.path, &entry.name, enable) {
+                Ok(()) => {
+                    if let Err(e) = crate::choices::update(|c| c.set_task(&entry, enable)) {
+                        let _ = tx.send(AppEvent::Error(e));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!(
+                        "Task toggle '{}' failed: {e}",
+                        entry.name
+                    )));
+                }
             }
             let list = system::query_tasks(Duration::from_secs(90));
             let _ = tx.send(AppEvent::TaskList(list));
@@ -4668,6 +4736,30 @@ impl DashboardApp {
             if ui.button(t.startup_open_settings).clicked() {
                 open_windows_target("ms-settings:startupapps");
             }
+            let safe_off: Vec<StartupEntry> = self
+                .autostart_entries
+                .iter()
+                .filter(|s| {
+                    s.enabled
+                        && s.can_toggle()
+                        && matches!(
+                            advice::startup_advice(&s.name, &s.command).map(|e| e.advice),
+                            Some(Advice::SafeOff)
+                        )
+                })
+                .cloned()
+                .collect();
+            if !safe_off.is_empty()
+                && ui
+                    .add_enabled(
+                        self.autostart_busy.is_none(),
+                        egui::Button::new(i18n::bulk_off_button(self.lang, safe_off.len())),
+                    )
+                    .on_hover_text(t.bulk_off_hover)
+                    .clicked()
+            {
+                self.bulk_off = Some(BulkOff::Startup(safe_off));
+            }
             if self.autostart_loading {
                 ui.add(egui::Spinner::new());
                 ui.label(t.startup_loading);
@@ -4738,6 +4830,7 @@ impl DashboardApp {
             }
         });
         let busy = self.autostart_busy.clone();
+        let kept = self.startup_choices.clone();
         let mut toggle: Option<StartupEntry> = None;
 
         egui::ScrollArea::vertical()
@@ -4792,9 +4885,14 @@ impl DashboardApp {
                                     egui::RichText::new(label).strong().color(color),
                                 )
                                 .min_size(egui::vec2(72.0, 20.0));
+                                let hover = if !s.enabled && kept.keeps_startup(s) {
+                                    t.kept_off_hover
+                                } else {
+                                    t.startup_toggle_hover
+                                };
                                 if ui
                                     .add_enabled(busy.is_none(), button)
-                                    .on_hover_text(t.startup_toggle_hover)
+                                    .on_hover_text(hover)
                                     .clicked()
                                 {
                                     toggle = Some(s.clone());
@@ -4879,21 +4977,137 @@ impl DashboardApp {
         let tx = self.tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = system::set_startup_enabled(
-                &entry.approved_key,
-                &entry.approved_name,
-                !entry.enabled,
-            );
-            if let Err(e) = result {
-                let _ = tx.send(AppEvent::Error(format!(
-                    "Startup toggle '{}' failed: {e}",
-                    entry.name
-                )));
+            let enable = !entry.enabled;
+            match system::set_startup_enabled(&entry.approved_key, &entry.approved_name, enable) {
+                Ok(()) => {
+                    if let Err(e) = crate::choices::update(|c| c.set_startup(&entry, enable)) {
+                        let _ = tx.send(AppEvent::Error(e));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!(
+                        "Startup toggle '{}' failed: {e}",
+                        entry.name
+                    )));
+                }
             }
             let list = system::query_startup(Duration::from_secs(60));
             let _ = tx.send(AppEvent::StartupList(list));
             ctx.request_repaint();
         });
+    }
+
+    /// Turns off every item of a confirmed "safe to turn off" list, records
+    /// each one as kept off, then re-queries that tab.
+    fn spawn_bulk_off(&mut self, ctx: &egui::Context, bulk: BulkOff) {
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        match &bulk {
+            BulkOff::Startup(_) => self.autostart_busy = Some(String::new()),
+            BulkOff::Tasks(_) => self.tasks_busy = Some(String::new()),
+        }
+        std::thread::spawn(move || {
+            match bulk {
+                BulkOff::Startup(items) => {
+                    for entry in items {
+                        match system::set_startup_enabled(
+                            &entry.approved_key,
+                            &entry.approved_name,
+                            false,
+                        ) {
+                            Ok(()) => {
+                                if let Err(e) =
+                                    crate::choices::update(|c| c.set_startup(&entry, false))
+                                {
+                                    let _ = tx.send(AppEvent::Error(e));
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::Error(format!(
+                                    "Startup toggle '{}' failed: {e}",
+                                    entry.name
+                                )));
+                            }
+                        }
+                    }
+                    let _ = tx.send(AppEvent::StartupList(system::query_startup(
+                        Duration::from_secs(60),
+                    )));
+                }
+                BulkOff::Tasks(items) => {
+                    for entry in items {
+                        match system::set_task_enabled(&entry.path, &entry.name, false) {
+                            Ok(()) => {
+                                if let Err(e) =
+                                    crate::choices::update(|c| c.set_task(&entry, false))
+                                {
+                                    let _ = tx.send(AppEvent::Error(e));
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::Error(format!(
+                                    "Task toggle '{}' failed: {e}",
+                                    entry.name
+                                )));
+                            }
+                        }
+                    }
+                    let _ = tx.send(AppEvent::TaskList(system::query_tasks(
+                        Duration::from_secs(90),
+                    )));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// The confirmation window for "Turn off all safe-to-turn-off".
+    fn draw_bulk_off_dialog(&mut self, ctx: &egui::Context) {
+        let Some(bulk) = &self.bulk_off else {
+            return;
+        };
+        let t = self.tr();
+        let names: Vec<String> = match bulk {
+            BulkOff::Startup(items) => items.iter().map(|e| e.name.clone()).collect(),
+            BulkOff::Tasks(items) => items.iter().map(|e| e.name.clone()).collect(),
+        };
+        let mut confirm = false;
+        let mut cancel = false;
+        egui::Window::new(t.bulk_off_title)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(520.0);
+                ui.label(t.bulk_off_intro);
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .max_height(260.0)
+                    .show(ui, |ui| {
+                        for n in &names {
+                            ui.label(format!("\u{2022} {n}"));
+                        }
+                    });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(egui::RichText::new(t.bulk_off_confirm).strong())
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                    if ui.button(t.bundle_cancel).clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if confirm {
+            if let Some(b) = self.bulk_off.take() {
+                self.spawn_bulk_off(ctx, b);
+            }
+        } else if cancel {
+            self.bulk_off = None;
+        }
     }
 
     /// Changes a service's start type in the background, then re-queries.
@@ -4902,10 +5116,17 @@ impl DashboardApp {
         let tx = self.tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            if let Err(e) = system::set_service_start_mode(&name, mode) {
-                let _ = tx.send(AppEvent::Error(format!(
-                    "Set-Service '{name}' -> {mode} failed: {e}"
-                )));
+            match system::set_service_start_mode(&name, mode) {
+                Ok(()) => {
+                    if let Err(e) = crate::choices::update(|c| c.set_service(&name, mode)) {
+                        let _ = tx.send(AppEvent::Error(e));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!(
+                        "Set-Service '{name}' -> {mode} failed: {e}"
+                    )));
+                }
             }
             let list = system::query_services(Duration::from_secs(60));
             let _ = tx.send(AppEvent::ServiceList(list));

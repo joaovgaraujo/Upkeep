@@ -6,6 +6,7 @@
 
 pub mod advice;
 pub mod app;
+pub mod choices;
 pub mod drivers;
 pub mod engine;
 pub mod i18n;

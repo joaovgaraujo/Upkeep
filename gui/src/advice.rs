@@ -162,6 +162,24 @@ static SERVICES_KB: &[AdviceEntry] = &[
     entry!(&["com.docker", "docker"], Optional,
         "Docker's backend. Only needed while you develop with containers.",
         "Backend do Docker. S\u{f3} necess\u{e1}rio enquanto voc\u{ea} desenvolve com cont\u{ea}ineres."),
+    entry!(&["anydesk"], Optional,
+        "AnyDesk's remote-access service. Keep ONLY if you reach this PC with AnyDesk; otherwise set it to Manual.",
+        "Servi\u{e7}o de acesso remoto do AnyDesk. Mantenha APENAS se acessa este PC pelo AnyDesk; sen\u{e3}o, deixe em Manual."),
+    entry!(&["nordvpn", "nordsec"], Optional,
+        "NordVPN's background services. Needed only while you use NordVPN; Manual starts them when the app opens.",
+        "Servi\u{e7}os em segundo plano do NordVPN. S\u{f3} necess\u{e1}rios enquanto voc\u{ea} usa o NordVPN; em Manual, iniciam quando o app abre."),
+    entry!(&["netbird"], Optional,
+        "NetBird mesh VPN. Keep if this PC should stay reachable on your NetBird network.",
+        "VPN em malha NetBird. Mantenha se este PC deve continuar acess\u{ed}vel pela sua rede NetBird."),
+    entry!(&["sqlbrowser", "sql server browser"], Optional,
+        "Lets other PCs find named SQL Server instances on this one. Not needed for local use.",
+        "Permite que outros PCs encontrem inst\u{e2}ncias nomeadas do SQL Server neste. Desnecess\u{e1}rio para uso local."),
+    entry!(&["easytune"], Optional,
+        "GIGABYTE EasyTune's engine, for overclocking and fan tuning from Windows. Not needed if you set those in the BIOS.",
+        "Motor do GIGABYTE EasyTune, para overclock e ventoinhas pelo Windows. Desnecess\u{e1}rio se voc\u{ea} ajusta isso na BIOS."),
+    entry!(&["usbipd"], Optional,
+        "Shares USB devices with WSL. Needed only while a USB device is attached to WSL.",
+        "Compartilha dispositivos USB com o WSL. S\u{f3} necess\u{e1}rio enquanto um dispositivo USB est\u{e1} conectado ao WSL."),
     entry!(&["rustdesk"], Optional,
         "Remote-access server. Keep ONLY if you use RustDesk to reach this PC from elsewhere.",
         "Servidor de acesso remoto. Mantenha APENAS se voc\u{ea} usa o RustDesk para acessar este PC de fora."),
@@ -310,6 +328,24 @@ static STARTUP_KB: &[AdviceEntry] = &[
     entry!(&["parsec"], Optional,
         "Keep if you connect to this PC remotely with Parsec.",
         "Mantenha se voc\u{ea} acessa este PC remotamente com o Parsec."),
+    entry!(&["anydesk"], Optional,
+        "Keep ONLY if you use AnyDesk to reach this PC remotely.",
+        "Mantenha APENAS se usa o AnyDesk para acessar este PC remotamente."),
+    entry!(&["netbird"], Optional,
+        "NetBird's tray app. The VPN itself runs as a service; the tray only shows its status.",
+        "Bandeja do NetBird. A VPN roda como servi\u{e7}o; a bandeja s\u{f3} mostra o status."),
+    entry!(&["nordvpn"], Optional,
+        "Starts NordVPN at sign-in. Keep if you want the VPN up from the start.",
+        "Inicia o NordVPN no login. Mantenha se quer a VPN ligada desde o in\u{ed}cio."),
+    entry!(&["softlandingcreativemanagement", "softlanding"], SafeOff,
+        "Windows tips and suggestions content. Nothing needs it.",
+        "Conte\u{fa}do de dicas e sugest\u{f5}es do Windows. Nada precisa disso."),
+    entry!(&["firefox background update"], Optional,
+        "Firefox updates itself in the background. Upkeep also updates Firefox, so this is optional.",
+        "O Firefox se atualiza em segundo plano. O Upkeep tamb\u{e9}m atualiza o Firefox, ent\u{e3}o isto \u{e9} opcional."),
+    entry!(&["-os-autostart"], Optional,
+        "Reopens Firefox after a restart if it was open when Windows shut down.",
+        "Reabre o Firefox depois de reiniciar, se ele estava aberto quando o Windows desligou."),
     entry!(&["rustdesk"], Optional,
         "Keep ONLY if you use RustDesk to reach this PC remotely.",
         "Mantenha APENAS se usa o RustDesk para acessar este PC remotamente."),
@@ -481,6 +517,23 @@ mod tests {
             Some(Optional)
         );
         assert!(startup_advice("SomeUnknownThing", "x.exe").is_none());
+        assert_eq!(
+            service_advice("AnyDesk", "AnyDesk Service").map(|e| e.advice),
+            Some(Optional)
+        );
+        assert_eq!(
+            startup_advice("SoftLandingCreativeManagementTask", "").map(|e| e.advice),
+            Some(SafeOff)
+        );
+        // The Default Browser Agent is still telemetry, not the updater.
+        assert_eq!(
+            startup_advice(
+                "Firefox Default Browser Agent 308046B0AF4A39CB",
+                "default-browser-agent.exe"
+            )
+            .map(|e| e.advice),
+            Some(SafeOff)
+        );
     }
 
     #[test]
