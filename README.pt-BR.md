@@ -162,6 +162,11 @@ vale entender:
 - **O atualizador do G HUB fica em Manual (1.9.6).** Inicialização e Serviços
   não lista mais o serviço de atualização do Logitech G HUB como algo que pode
   ser desligado. O G HUB o inicia ao abrir e falha quando ele está desativado.
+- **O PowerShell 7.7 se instala sozinho (1.9.7).** O winget só distribui o 7.7
+  como pacote MSIX, e não consegue atualizar uma instalação MSI do 7.6 para
+  ele. O Upkeep instala o MSIX e depois remove o MSI. Um download que o
+  servidor do fabricante recusa (403 ou 404) vai para a lista de atualização
+  manual em vez de dar erro no winget.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

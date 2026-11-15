@@ -162,6 +162,10 @@ needs it. That has consequences worth understanding:
 - **G HUB's updater stays on Manual (1.9.6).** Startup & Services no longer
   lists Logitech G HUB's updater service as safe to turn off. G HUB starts it
   when it opens and fails when it's disabled.
+- **PowerShell 7.7 installs by itself (1.9.7).** winget ships 7.7 only as an
+  MSIX package, which it can't upgrade a 7.6 MSI install into. Upkeep installs
+  the MSIX, then removes the MSI. A download the publisher's server refuses
+  (403 or 404) is listed for a manual update instead of failing winget.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

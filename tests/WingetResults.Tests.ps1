@@ -2,7 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $windowsPowerShell = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     function Invoke-FakeWinget {
-        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known','battlenet','restart-pending','parallel','busy','prefetch','prefetch-stuck','tight-source')][string]$Scenario)
+        param([ValidateSet('inventory-error','bulk-error','pending','recovered','current','localized','retry','selected','ignored','empty-selection','inventory','nonadmin','nonadmin-timeout','tight','unknown-installed','portable-lost','tech-mismatch','edge','winget-itself','git-in-use','success-pending','noop-known','battlenet','restart-pending','parallel','busy','prefetch','prefetch-stuck','tight-source','download-403','pwsh-msix')][string]$Scenario)
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
         Copy-Item "$repoRoot\steps\Update-WingetApps.ps1", "$repoRoot\steps\Deelevate.ps1", "$repoRoot\steps\InUse.ps1" $case
@@ -65,6 +65,8 @@ function winget {
     }
     if ($args -contains '--id' -and 'SCENARIO' -eq 'success-pending') { return }
     if ($args -contains '--id' -and 'SCENARIO' -eq 'restart-pending') { 'Successfully installed. Restart the application to complete the upgrade.'; return }
+    if ($args -contains '--id' -and 'SCENARIO' -eq 'download-403') { $global:LASTEXITCODE = -2145844845; 'Download request status is not success.'; '0x80190193 : Forbidden (403).'; return }
+    if ($args -contains '--id' -and 'SCENARIO' -eq 'pwsh-msix') { $global:LASTEXITCODE = -1978335212; 'No installed package found matching input criteria.'; return }
     if ($args -contains '--id' -and 'SCENARIO' -eq 'tech-mismatch') { $global:LASTEXITCODE = -1978335090; 'The install technology of the newer version specified is different from the current version installed.'; return }
     # App Installer upgrades fine, but winget keeps listing the old version.
     if ($args -contains '--id' -and 'SCENARIO' -eq 'winget-itself') { 'Successfully installed'; return }
@@ -110,6 +112,7 @@ function winget {
     if ('SCENARIO' -eq 'winget-itself') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'App Installer','Microsoft.AppInstaller','1.26.509.0','1.29.380'; ''; return }
     if ('SCENARIO' -eq 'edge') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Microsoft Edge','Microsoft.Edge','154.0.1','154.0.2'; ''; return }
     if ('SCENARIO' -eq 'battlenet') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Battle.net','Blizzard.BattleNet','Unknown','2.0.0.4232'; ''; return }
+    if ('SCENARIO' -eq 'pwsh-msix') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'PowerShell','Microsoft.PowerShell','7.6.10.0','7.7.0.0'; ''; return }
     if ('SCENARIO' -eq 'git-in-use') { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Git','Git.Git','2.56.0','2.56.0.3'; ''; return }
     '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Fixture','Fixture.App','1','2'
     if ('SCENARIO' -in @('retry','selected','ignored','empty-selection','inventory','parallel','busy','prefetch','prefetch-stuck')) { '{0,-20}{1,-35}{2,-15}{3,-15}winget' -f 'Other','Fixture.Other','1','2' }
@@ -126,6 +129,8 @@ function Get-CimInstance {
     @([pscustomobject]@{ Name = 'bash.exe'; ProcessId = 1; ExecutablePath = (Join-Path $g 'usr\bin\bash.exe') })
 }
 if ('SCENARIO' -eq 'portable-lost') { New-Item "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Fixture.App_Microsoft.Winget.Source_8wekyb3d8bbwe" -ItemType Directory -Force | Out-Null }
+# Stands in for the real move: records the call and clears the inventory.
+if ('SCENARIO' -eq 'pwsh-msix') { Set-Content "$PSScriptRoot\Move-PowerShellToMsix.ps1" '$global:normalUpdated = $true; Add-Content "$PSScriptRoot\calls.txt" MOVE_PWSH; [pscustomobject]@{ Status = ''moved'' }' }
 if ('SCENARIO' -eq 'selected') { $env:UPKEEP_SELECTED_IDS = '["Fixture.App"]' }
 if ('SCENARIO' -eq 'empty-selection') { $env:UPKEEP_SELECTED_IDS = '[]' }
 if ('SCENARIO' -eq 'ignored') {
@@ -391,6 +396,22 @@ Describe 'Apps winget cannot update here are reported, not failed' {
         $r.Code | Should -Be 1
         $r.Manual.Count | Should -Be 0
         @($r.Failed) | Should -Contain 'Fixture.App'
+    }
+}
+
+Describe 'PowerShell 7.7 and broken download links' {
+    It 'moves PowerShell from the MSI to the MSIX package when winget cannot match it' {
+        $r = Invoke-FakeWinget pwsh-msix
+        $r.Calls | Should -Match 'MOVE_PWSH'
+        $r.Code | Should -Be 0
+        $r.Failed.Count | Should -Be 0
+    }
+    It 'lists a download the publisher refuses (403) as a manual update, not an error' {
+        $r = Invoke-FakeWinget download-403
+        $r.Code | Should -Be 3
+        $r.Manual[0].Id | Should -Be 'Fixture.App'
+        $r.Manual[0].Reason | Should -Match '403 Forbidden'
+        $r.Output | Should -Not -Match '\[error\]'
     }
 }
 

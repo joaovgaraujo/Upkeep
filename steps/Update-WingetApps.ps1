@@ -1027,6 +1027,35 @@ foreach ($id in $stuck) {
         }
     }
 
+    # PowerShell 7.7 ships in winget only as an MSIX package, and winget can't
+    # upgrade the 7.6 MSI install into it: the same NO_APPLICATIONS_FOUND
+    # (2026-11-15). Move-PowerShellToMsix.ps1 installs the MSIX, then removes
+    # the MSI.
+    $pwshMove = Join-Path $PSScriptRoot 'Move-PowerShellToMsix.ps1'
+    if ($code -eq -1978335212 -and $id -eq 'Microsoft.PowerShell' -and (Test-Path -LiteralPath $pwshMove)) {
+        $move = & $pwshMove -LogFile $LogFile | Select-Object -Last 1
+        if ($move.Status -eq 'moved') { continue }
+        if ($move.Status -eq 'manual') {
+            Add-ManualUpdate -Id $id -Reason $move.Reason -Fix $move.Fix
+            continue
+        }
+        if ($move.Status -eq 'failed') {
+            Write-Host "[winget]   $id : could not move PowerShell 7 to the MSIX package: $($move.Detail)"
+            continue
+        }
+    }
+
+    # 0x80190193 / 0x80190194: the publisher's server refuses the download
+    # (Intel XTU, 403 on 2026-11-15, from any client). Nothing on this PC can
+    # fix that, and it stays broken until the publisher or the winget package
+    # fixes the link.
+    if ($code -in -2145844845, -2145844844 -or $res -match '0x8019019[34]') {
+        $http = if ($code -eq -2145844844 -or $res -match '0x80190194') { '404 Not Found' } else { '403 Forbidden' }
+        Add-ManualUpdate -Id $id -Reason "the publisher's download link refuses the download ($http)" `
+            -Fix "Nothing to fix on this PC. Upkeep tries again next run; to update now, download it from the publisher's site."
+        continue
+    }
+
     # 0x8A15002B = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE (-1978335189)
     if ($code -eq -1978335189 -or $res -match 'No applicable upgrade found') {
         $scope = Get-InstallScope -Id $id
