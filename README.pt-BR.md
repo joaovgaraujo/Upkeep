@@ -159,6 +159,9 @@ vale entender:
   Tarefas agendadas têm um botão que desliga tudo o que pode ser desligado. O
   que você desliga ali é desligado de novo depois de atualizações de apps que
   o religam.
+- **O atualizador do G HUB fica em Manual (1.9.6).** Inicialização e Serviços
+  não lista mais o serviço de atualização do Logitech G HUB como algo que pode
+  ser desligado. O G HUB o inicia ao abrir e falha quando ele está desativado.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

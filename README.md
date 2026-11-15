@@ -159,6 +159,9 @@ needs it. That has consequences worth understanding:
   lists every app's task with when it runs. Startup and Scheduled tasks each
   have a button that turns off everything marked safe to turn off. What you
   turn off there is turned off again after app updates that re-enable it.
+- **G HUB's updater stays on Manual (1.9.6).** Startup & Services no longer
+  lists Logitech G HUB's updater service as safe to turn off. G HUB starts it
+  when it opens and fails when it's disabled.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

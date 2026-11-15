@@ -121,9 +121,11 @@ static SERVICES_KB: &[AdviceEntry] = &[
     entry!(&["edgeupdate", "microsoft edge update"], Optional,
         "Edge's updater. Keeping it on is fine; Edge also updates on launch.",
         "Atualizador do Edge. Pode manter; o Edge tamb\u{e9}m se atualiza ao abrir."),
-    entry!(&["lghubupdater", "lghub updater"], SafeOff,
-        "Logitech G HUB updater. Your peripherals work without it.",
-        "Atualizador do Logitech G HUB. Seus perif\u{e9}ricos funcionam sem ele."),
+    // G HUB starts this service itself when it opens. Disabled, G HUB
+    // stopped working (2026-11-15), so Manual is as far as it should go.
+    entry!(&["lghubupdater", "lghub updater"], Keep,
+        "Logitech G HUB updater. Keep it on Manual: G HUB starts it when it opens and fails without it. Don't disable it.",
+        "Atualizador do Logitech G HUB. Mantenha em Manual: o G HUB o inicia ao abrir e falha sem ele. N\u{e3}o desative."),
     // -- Windows features: personal choice ---------------------------------
     entry!(&["sysmain"], Optional,
         "Preloads your frequent apps. Fine on or off with an SSD.",
@@ -533,6 +535,12 @@ mod tests {
             )
             .map(|e| e.advice),
             Some(SafeOff)
+        );
+        // G HUB fails with its updater disabled, so it must never be in the
+        // "turn off what's safe" list.
+        assert_eq!(
+            service_advice("LGHUBUpdaterService", "LGHUB Updater Service").map(|e| e.advice),
+            Some(Keep)
         );
     }
 
