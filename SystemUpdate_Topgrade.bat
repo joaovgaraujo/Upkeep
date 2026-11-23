@@ -54,6 +54,14 @@ if %errorLevel% neq 0 (
 )
 :after_elevate
 
+rem -- Shorten PATH: drop duplicate and missing folders ----------------------
+rem    npx puts its own folders in front of PATH and runs the package through
+rem    cmd.exe. With an 8,056-character PATH that went past cmd's 8,191 limit
+rem    and topgrade's Skills step failed with "'skills' is not recognized"
+rem    (2026-11-23). Removing duplicates and folders that no longer exist took
+rem    it to 5,431 here. Order is kept; the first copy of each folder wins.
+for /f "delims=" %%P in ('powershell -NoProfile -Command "$seen=@{}; @($env:Path -split ';' | Where-Object { $_ -and -not $seen.ContainsKey($_.TrimEnd('\').ToLower()) -and (Test-Path -LiteralPath $_) } | ForEach-Object { $seen[$_.TrimEnd('\').ToLower()]=1; $_ }) -join ';'"') do set "PATH=%%P"
+
 rem -- Started over SSH: run in the desktop session instead -------------------
 rem    winget (a packaged app) does not start in an SSH session ("Access is
 rem    denied"), and normal-user updates need the user's desktop. The engine

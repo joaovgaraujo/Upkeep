@@ -45,9 +45,11 @@ a fresh private certificate would have.
 
 1. **Apply** at <https://signpath.org/apply>, linking
    `https://github.com/joaovgaraujo/Upkeep` and pointing at an existing release.
-2. **Create two artifact configurations** in the SignPath project, because the
-   workflow signs two different things:
+2. **Create three artifact configurations** in the SignPath project, because the
+   workflow signs three different things:
    - slug `exe` for `Upkeep.exe`
+   - slug `noadmin-exe` for the no-admin build of `Upkeep.exe`, packed as
+     `Upkeep-NoAdmin.exe` in `Upkeep-NoAdmin.zip`
    - slug `installer` for `Upkeep-Setup.exe`
 3. **Add repository variables** (Settings → Secrets and variables → Actions →
    Variables):

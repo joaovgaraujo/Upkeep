@@ -50,6 +50,12 @@ jobs:
         run: cargo build --release --locked
         working-directory: gui
 
+      # The no-admin exe (cargo feature "portable", asInvoker manifest), in
+      # its own target dir so it does not overwrite Upkeep.exe.
+      - name: Build no-admin exe
+        run: cargo build --release --locked --features portable --target-dir target/noadmin
+        working-directory: gui
+
       # ---- Sign the application exe ------------------------------------
       - name: Upload unsigned exe
         id: unsigned-exe
@@ -78,6 +84,36 @@ jobs:
         run: |
           $s = Get-AuthenticodeSignature gui\target\release\Upkeep.exe
           if ($s.Status -ne 'Valid') { throw "exe signature is $($s.Status)" }
+          Write-Host "Signed by: $($s.SignerCertificate.Subject)"
+
+      # ---- Sign the no-admin exe -----------------------------------------
+      - name: Upload unsigned no-admin exe
+        id: unsigned-noadmin
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-noadmin-exe
+          path: gui/target/noadmin/release/Upkeep.exe
+          if-no-files-found: error
+
+      - name: Sign no-admin exe
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: noadmin-exe
+          github-artifact-id: ${{ steps.unsigned-noadmin.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: gui/target/noadmin/release
+
+      - name: Confirm no-admin exe signature
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          $s = Get-AuthenticodeSignature gui\target\noadmin\release\Upkeep.exe
+          if ($s.Status -ne 'Valid') { throw "no-admin exe signature is $($s.Status)" }
           Write-Host "Signed by: $($s.SignerCertificate.Subject)"
 
       # ---- Package (consumes the signed exe) ---------------------------
@@ -127,12 +163,10 @@ jobs:
         shell: pwsh
         run: .\Build-Portable.ps1 -SkipCargoBuild
 
-      # The no-admin build (cargo feature "portable", asInvoker manifest),
-      # in its own target dir. Not signed: the SignPath "exe" configuration
-      # covers Upkeep.exe only.
+      # Packs the no-admin exe built and signed above.
       - name: Build no-admin zip
         shell: pwsh
-        run: .\Build-Portable.ps1 -NoAdmin
+        run: .\Build-Portable.ps1 -NoAdmin -SkipCargoBuild
 
       # ---- Publish ------------------------------------------------------
       - name: Attest build provenance

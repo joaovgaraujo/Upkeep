@@ -725,6 +725,8 @@ function Start-QuickTopgrade {
     if ($RetryFailed -or $env:DASHBOARD_SKIP_OTHER_APPS -eq '1' -or $env:UPKEEP_WINGET_SERIAL -eq '1') { return }
     if (-not (Get-Command topgrade -ErrorAction SilentlyContinue)) { return }
     $steps = @($script:quickSteps.Keys | Where-Object {
+            # tailscale update needs administrator rights.
+            if ($userMode -and $_ -eq 'tailscale') { return $false }
             $pattern = $script:quickSteps[$_]
             -not @($PendingIds | Where-Object { $_ -match $pattern }).Count
         })
