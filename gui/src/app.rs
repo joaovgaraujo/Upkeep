@@ -339,8 +339,9 @@ impl DashboardApp {
             ui_scale,
             tx,
             rx,
-            cat_windows_update: true,
-            cat_feature_update: true,
+            // Both need administrator rights, which user mode never asks for.
+            cat_windows_update: !crate::USER_MODE,
+            cat_feature_update: !crate::USER_MODE,
             cat_store: true,
             cat_apps: true,
             cat_steam: true,
@@ -1891,7 +1892,9 @@ impl DashboardApp {
     fn draw_nav(&mut self, ctx: &egui::Context) {
         let t = self.tr();
         egui::TopBottomPanel::top("nav_bar").show(ctx, |ui| {
-            let pages = [
+            // Installing apps, new-PC setup, tweaks and services all need
+            // administrator rights; the portable build leaves those pages out.
+            let pages: Vec<(Page, &str)> = [
                 (Page::Update, t.nav_update),
                 (Page::Install, t.nav_install),
                 (Page::NewPc, t.nav_newpc),
@@ -1899,7 +1902,17 @@ impl DashboardApp {
                 (Page::System, t.nav_system),
                 (Page::Tools, t.nav_tools),
                 (Page::Advanced, t.nav_advanced),
-            ];
+            ]
+            .into_iter()
+            .filter(|(page, _)| {
+                !crate::USER_MODE
+                    || !matches!(page, Page::Install | Page::NewPc | Page::Optimize | Page::System)
+            })
+            .collect();
+            // A link elsewhere may point at a page this build leaves out.
+            if !pages.iter().any(|(page, _)| *page == self.page) {
+                self.page = Page::Update;
+            }
             let needed: f32 = pages
                 .iter()
                 .map(|(_, label)| {
@@ -2626,8 +2639,15 @@ impl DashboardApp {
                     ui.strong(if pt { "Incluído na atualização" } else { "Included in this update" });
                     ui.label(if pt { "Estes serviços detectam e atualizam seus itens ao executar. Desmarque apenas o que quiser excluir." } else { "These services detect and update their items when run. Uncheck anything you want to exclude." });
                     ui.add_space(6.0);
-                    ui.checkbox(&mut self.cat_windows_update, "Windows Update");
-                    ui.checkbox(&mut self.cat_feature_update, t.cat_feature_update);
+                    if crate::USER_MODE {
+                        self.cat_windows_update = false;
+                        self.cat_feature_update = false;
+                        ui.colored_label(theme::warn_amber(), if pt { "Versão portátil, sem direitos de administrador: Windows Update, Chocolatey, apps instalados para todos os usuários e serviços ficam de fora." } else { "Portable version, no administrator rights: Windows Update, Chocolatey, apps installed for all users and services are left out." });
+                    }
+                    ui.add_enabled_ui(!crate::USER_MODE, |ui| {
+                        ui.checkbox(&mut self.cat_windows_update, "Windows Update");
+                        ui.checkbox(&mut self.cat_feature_update, t.cat_feature_update);
+                    });
                     if self.cat_feature_update {
                         ui.colored_label(theme::warn_amber(), t.cat_feature_update_warn);
                     }
@@ -2991,7 +3011,9 @@ impl DashboardApp {
             ui.selectable_value(&mut self.active_tab, Tab::Log, t.tab_log);
             ui.selectable_value(&mut self.active_tab, Tab::Summary, t.tab_summary);
             ui.selectable_value(&mut self.active_tab, Tab::Pins, t.tab_pins);
-            ui.selectable_value(&mut self.active_tab, Tab::DriverStore, t.tab_driver_store);
+            if !crate::USER_MODE {
+                ui.selectable_value(&mut self.active_tab, Tab::DriverStore, t.tab_driver_store);
+            }
         });
         ui.separator();
 
@@ -5720,7 +5742,10 @@ mod tests {
     fn full_update_is_selected_by_default() {
         let ctx = egui::Context::default();
         let app = DashboardApp::from_root(&ctx, None);
-        assert!(app.cat_windows_update && app.cat_store && app.cat_apps && app.cat_steam);
+        assert!(app.cat_store && app.cat_apps && app.cat_steam);
+        // The portable build never asks for administrator rights.
+        assert_eq!(app.cat_windows_update, !crate::USER_MODE);
+        assert_eq!(app.cat_feature_update, !crate::USER_MODE);
         assert!(app.run_other_apps);
         assert!(!app.is_running);
     }

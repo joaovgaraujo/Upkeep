@@ -19,7 +19,26 @@ rem    window": skip every prompt and the closing countdown.
 set "INTERACTIVE=1"
 if "%DASHBOARD_RUN%"=="1" set "INTERACTIVE=0"
 
+rem -- Portable user mode: never ask for administrator rights ----------------
+rem    UPKEEP_USER_MODE=1 is set by Upkeep-NoAdmin.exe (built with the
+rem    "portable" feature, asInvoker manifest). The run stays unelevated and
+rem    only updates what this Windows account can update by itself:
+rem    per-user winget apps, the Store, language tools, extensions, skills,
+rem    Steam and JDownloader. Windows Update, the 26H2 step, Chocolatey,
+rem    machine-wide apps, G HUB, RustDesk and the startup restores need
+rem    administrator rights and are skipped. RunAsInvoker makes an installer
+rem    that asks for elevation fail instead of showing a UAC prompt.
+set "USER_MODE=0"
+if "%UPKEEP_USER_MODE%"=="1" set "USER_MODE=1"
+if "%USER_MODE%"=="0" goto :elevate
+set "DASHBOARD_SKIP_WINUPDATE=1"
+set "DASHBOARD_SKIP_FEATUREUPDATE=1"
+set "__COMPAT_LAYER=RunAsInvoker"
+echo [portable] Running without administrator rights: Windows Update, Chocolatey, machine-wide apps and services are skipped.
+goto :after_elevate
+
 rem -- Self-elevate to administrator (UAC prompt) ---------------------------
+:elevate
 net session >nul 2>&1
 if %errorLevel% neq 0 (
     echo Requesting administrator elevation...
@@ -33,6 +52,7 @@ if %errorLevel% neq 0 (
     )
     exit /b
 )
+:after_elevate
 
 rem -- Started over SSH: run in the desktop session instead -------------------
 rem    winget (a packaged app) does not start in an SSH session ("Access is
@@ -88,6 +108,8 @@ rem -- Pre-flight: ensure Chocolatey is available ---------------------------
 :after_winget_preflight
 if "%DASHBOARD_SKIP_APPS%"=="1" goto :after_other_app_preflight
 if "%DASHBOARD_SKIP_OTHER_APPS%"=="1" goto :after_other_app_preflight
+rem Chocolatey lives in ProgramData and needs administrator rights.
+if "%USER_MODE%"=="1" goto :after_choco_preflight
 where choco >nul 2>&1
 if %errorLevel% neq 0 (
     echo [setup] Chocolatey not found, installing...
@@ -102,16 +124,19 @@ rem -- Quieten Chocolatey download progress (topgrade calls choco without
 rem    --no-progress, which otherwise spams thousands of progress lines into
 rem    the log). This is a one-time global choco setting.
 where choco >nul 2>&1 && choco feature disable -n=showDownloadProgress >nul 2>&1
+:after_choco_preflight
 
 rem -- wsl.exe writes UTF-16 when redirected, which lands in the UTF-8 log as
 rem    "C h e c k i n g   f o r   u p d a t e s". WSL_UTF8 makes it emit UTF-8.
 set "WSL_UTF8=1"
 
 rem -- Ensure topgrade is installed -----------------------------------------
+set "WG_SCOPE="
+if "%USER_MODE%"=="1" set "WG_SCOPE=--scope user"
 where topgrade >nul 2>&1
 if %errorLevel% neq 0 (
     echo [setup] topgrade not found, installing via winget...
-    winget install --id=topgrade-rs.topgrade -e --accept-source-agreements --accept-package-agreements --silent
+    winget install --id=topgrade-rs.topgrade -e --accept-source-agreements --accept-package-agreements --silent %WG_SCOPE%
     if !errorLevel! neq 0 (
         echo [setup] winget install failed, trying chocolatey...
         where choco >nul 2>&1
@@ -237,7 +262,12 @@ echo [setup] Writing topgrade config...
     rem whichever channel installed it, and topgrade ran "claude update" a
     rem second time on every run. claude_code_plugins stays on; nothing else
     rem updates the plugin marketplaces.
+    rem User mode adds the steps that need administrator rights.
+    if "%USER_MODE%"=="1" (
+    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system", "claude_code", "chocolatey", "wsl_update", "tailscale", "microsoft_office", "powershell"]
+    ) else (
     echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system", "claude_code"]
+    )
     echo.
     echo [windows]
     echo accept_all_updates = true
@@ -476,7 +506,8 @@ rem    Installers turn their own startup items back on (a winget update of
 rem    Tailscale set its service back to Automatic, 2026-11-13).
 rem    steps\Restore-StartupChoices.ps1 puts back what was turned off on the
 rem    Startup and Services page (LOCALAPPDATA\Upkeep\startup-choices.json).
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Restore-StartupChoices.ps1" -LogFile "%LOGFILE%"
+rem    Services and machine-wide startup items need administrator rights.
+if "%USER_MODE%"=="0" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0steps\Restore-StartupChoices.ps1" -LogFile "%LOGFILE%"
 
 rem -- Summary --------------------------------------------------------------
 if "%DASHBOARD_SKIP_APPS%"=="1" (
@@ -684,7 +715,9 @@ set "RELAY_TASK=Upkeep_Desktop_!RELAY_TAG!"
 set "RELAY_RC=1"
 mkdir "!RELAY_DIR!" 2>nul
 (set DASHBOARD_ & set UPKEEP_) > "!RELAY_DIR!\env.txt" 2>nul
-schtasks /create /tn "!RELAY_TASK!" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%~dp0steps\Invoke-InDesktop.ps1\" -WorkDir \"!RELAY_DIR!\"" /sc once /st 00:00 /it /rl highest /f >nul 2>&1
+set "RELAY_RL=highest"
+if "%USER_MODE%"=="1" set "RELAY_RL=limited"
+schtasks /create /tn "!RELAY_TASK!" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"%~dp0steps\Invoke-InDesktop.ps1\" -WorkDir \"!RELAY_DIR!\"" /sc once /st 00:00 /it /rl !RELAY_RL! /f >nul 2>&1
 if errorlevel 1 (
     echo [remote] Started over SSH, and the update could not be handed to your desktop session: creating the scheduled task failed.
     goto relay_cleanup

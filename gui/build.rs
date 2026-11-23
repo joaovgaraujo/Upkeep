@@ -8,8 +8,16 @@ fn main() {
     use embed_manifest::manifest::{ExecutionLevel, Setting};
     use embed_manifest::{embed_manifest, new_manifest};
 
+    // The "portable" feature builds Upkeep-NoAdmin.exe, which runs as the
+    // signed-in user and never shows a UAC prompt (see lib.rs USER_MODE).
+    let portable = std::env::var_os("CARGO_FEATURE_PORTABLE").is_some();
+    let level = if portable {
+        ExecutionLevel::AsInvoker
+    } else {
+        ExecutionLevel::RequireAdministrator
+    };
     let manifest = new_manifest("Upkeep")
-        .requested_execution_level(ExecutionLevel::RequireAdministrator)
+        .requested_execution_level(level)
         .dpi_awareness(embed_manifest::manifest::DpiAwareness::PerMonitorV2)
         .long_path_aware(Setting::Enabled);
 
@@ -34,7 +42,10 @@ fn main() {
         "LegalCopyright",
         "Copyright (c) 2026 joaovguedes. MIT licensed.",
     );
-    res.set("OriginalFilename", "Upkeep.exe");
+    res.set(
+        "OriginalFilename",
+        if portable { "Upkeep-NoAdmin.exe" } else { "Upkeep.exe" },
+    );
     res.set("InternalName", "Upkeep");
     if let Err(e) = res.compile() {
         // In a debug build this is cosmetic, so warn and carry on. In a

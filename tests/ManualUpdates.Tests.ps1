@@ -132,6 +132,50 @@ function Get-CimInstance { @([pscustomobject]@{ Name = 'code.exe'; ProcessId = 7
     }
 }
 
+Describe 'Leaving apps winget updates to winget' {
+    BeforeAll {
+        $fakeChoco = @'
+function choco {
+    Add-Content "$env:LOCALAPPDATA\calls.txt" ($args -join ' ')
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq 'outdated') {
+        'autohotkey.install|2.0.31|2.0.32|false'; 'autohotkey|2.0.31|2.0.32|false'
+        'gh|2.104.0|2.105.0|false'; 'ffmpeg-full|9.0.2|9.1.0|false'; 'calibre|9.18.0|9.19.0|false'
+        'ruby.install|3.4.12.1|3.4.13.1|false'; 'ea-app|13.7|13.8|true'
+    }
+}
+function Get-CimInstance { @() }
+function uv { $global:LASTEXITCODE = 0 }
+function Get-Process { }
+'@
+        $arrangeOwned = {
+            param($case)
+            New-Item "$case\Upkeep\Reports" -ItemType Directory -Force | Out-Null
+            '["AutoHotkey.AutoHotkey","GitHub.cli","Gyan.FFmpeg","calibre.calibre"]' | Set-Content "$case\Upkeep\winget-owned.json"
+            '["calibre.calibre"]' | Set-Content "$case\Upkeep\Reports\winget-failed.json"
+        }
+    }
+    It 'holds the Chocolatey copies of apps winget updated, and nothing else' {
+        $r = Invoke-Step -Script 'Protect-InUsePackages.ps1' -Arguments '-Action Hold' -Prelude $fakeChoco -Arrange $arrangeOwned
+        $r.Code | Should -Be 0
+        $r.Calls | Should -Match 'pin add -n=autohotkey.install'
+        $r.Calls | Should -Match 'pin add -n=autohotkey '
+        $r.Calls | Should -Match 'pin add -n=gh '
+        $r.Calls | Should -Match 'pin add -n=ffmpeg-full'
+        # winget failed on calibre this run: Chocolatey gets its turn.
+        $r.Calls | Should -Not -Match 'pin add -n=calibre'
+        $r.Calls | Should -Not -Match 'pin add -n=ruby'
+        $r.Calls | Should -Not -Match 'pin add -n=ea-app'
+        $r.Output | Should -Match 'Left to winget'
+        $held = Get-Content "$($r.Case)\Upkeep\choco-held-pins.json" -Raw | ConvertFrom-Json
+        $held | Should -Contain 'gh'
+    }
+    It 'holds nothing when UPKEEP_CHOCO_DUPLICATES=1' {
+        $r = Invoke-Step -Script 'Protect-InUsePackages.ps1' -Arguments '-Action Hold' -Prelude ("`$env:UPKEEP_CHOCO_DUPLICATES = '1'`n" + $fakeChoco) -Arrange $arrangeOwned
+        $r.Calls | Should -Not -Match 'pin add'
+    }
+}
+
 Describe 'Claude Code and Codex updates by install method' {
     BeforeAll {
         # Fake npm: `root -g` points at the scratch prefix, `install -g` bumps the version.

@@ -167,6 +167,13 @@ vale entender:
   ele. O Upkeep instala o MSIX e depois remove o MSI. Um download que o
   servidor do fabricante recusa (403 ou 404) vai para a lista de atualização
   manual em vez de dar erro no winget.
+- **Execuções mais curtas, e uma versão sem direitos de administrador
+  (1.9.8).** O Chocolatey não reinstala mais um app que o winget acabou de
+  atualizar, e os passos rápidos do topgrade agora rodam junto com o winget
+  também quando iniciados pelo painel. O `Upkeep-NoAdmin.zip` nunca mostra o
+  aviso do UAC. Ele atualiza os apps instalados para a sua conta, a Store, a
+  Steam e suas ferramentas de desenvolvimento, e pula o Windows Update, o
+  Chocolatey e os apps instalados para todos os usuários.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro
@@ -262,6 +269,7 @@ cd ..
 Invoke-Pester -Path .\tests    # testes das etapas em PowerShell (Pester 5.7.1, Windows PowerShell 5.1)
 
 .\Build-Portable.ps1           # dist\Upkeep-Portable.zip + dist\Upkeep\
+.\Build-Portable.ps1 -NoAdmin  # dist\Upkeep-NoAdmin.zip, sem pedir administrador
 .\Build-Installer.ps1          # dist\Upkeep-Setup.exe
 ```
 

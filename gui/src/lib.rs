@@ -4,6 +4,11 @@
 //! the real executable by `build.rs` — that manifest only applies to `[[bin]]`
 //! targets, so keeping the actual logic here lets tests run unelevated.
 
+/// Portable user mode: built with the `portable` feature, the exe runs
+/// unelevated and the engine (UPKEEP_USER_MODE=1) skips everything that needs
+/// administrator rights instead of asking for them.
+pub const USER_MODE: bool = cfg!(feature = "portable");
+
 pub mod advice;
 pub mod app;
 pub mod choices;

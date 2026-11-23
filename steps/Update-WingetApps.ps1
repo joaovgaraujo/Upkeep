@@ -85,6 +85,12 @@ param(
 
 $ErrorActionPreference = 'Continue'
 if ($env:DASHBOARD_SKIP_OTHER_APPS -eq '1') { $NoChocoFallback = $true }
+# Portable user mode: never ask for administrator rights.
+# Only packages installed for this Windows account are listed and updated;
+# machine-wide ones are named once and left for the installed Upkeep.
+# Set by Upkeep-NoAdmin.exe.
+$userMode = $env:UPKEEP_USER_MODE -eq '1'
+if ($userMode) { $NoChocoFallback = $true }
 $ignorePath = Join-Path $env:LOCALAPPDATA 'Upkeep\winget-ignore.json'
 $ignoredIds = @()
 if (Test-Path -LiteralPath $ignorePath) { $ignoredIds = @((Get-Content -LiteralPath $ignorePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop)) }
@@ -125,7 +131,9 @@ if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
 # winget has no --output json for upgrade, so this uses the header column
 # offsets rather than splitting on whitespace (names contain spaces).
 function Get-PendingUpgrades {
-    $raw = winget upgrade --include-unknown --accept-source-agreements --disable-interactivity 2>&1 | Out-String
+    param([string]$Scope = $(if ($userMode) { 'user' } else { '' }))
+    $scopeArgs = if ($Scope) { @('--scope', $Scope) } else { @() }
+    $raw = winget upgrade --include-unknown --accept-source-agreements --disable-interactivity @scopeArgs 2>&1 | Out-String
     if ($LASTEXITCODE -notin @(0, -1978335212, -1978335189)) {
         throw "winget inventory failed (exit $LASTEXITCODE): $raw"
     }
@@ -711,7 +719,10 @@ $script:quick = $null
 function Start-QuickTopgrade {
     param([string[]]$PendingIds)
     if (-not $TopgradeConfig -or -not (Test-Path -LiteralPath $TopgradeConfig)) { return }
-    if ($RetryFailed -or $selectionMode -or $env:DASHBOARD_SKIP_OTHER_APPS -eq '1' -or $env:UPKEEP_WINGET_SERIAL -eq '1') { return }
+    # Not skipped in selection mode: Review and update always runs in it, so
+    # these steps never ran alongside winget from the dashboard (1.8.9 to 1.9.7).
+    # A tool deselected in the review is not updated by winget either.
+    if ($RetryFailed -or $env:DASHBOARD_SKIP_OTHER_APPS -eq '1' -or $env:UPKEEP_WINGET_SERIAL -eq '1') { return }
     if (-not (Get-Command topgrade -ErrorAction SilentlyContinue)) { return }
     $steps = @($script:quickSteps.Keys | Where-Object {
             $pattern = $script:quickSteps[$_]
@@ -752,6 +763,18 @@ New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
 $retryPath = Join-Path $reportDir 'winget-failed.json'
 $manualPath = Join-Path $reportDir 'manual-updates-winget.json'
 Remove-Item -LiteralPath $manualPath -ErrorAction SilentlyContinue
+# Every package winget has updated on this PC, kept across runs. The
+# Chocolatey step holds the same apps back (steps\Protect-InUsePackages.ps1),
+# so an app installed by both managers is not installed twice.
+function Save-WingetOwned {
+    param([string[]]$Updated)
+    if (-not $Updated.Count) { return }
+    $ownedPath = Join-Path $env:LOCALAPPDATA 'Upkeep\winget-owned.json'
+    # ForEach-Object unrolls: Windows PowerShell 5.1 emits a JSON array as one object.
+    $owned = @(try { Get-Content -LiteralPath $ownedPath -Raw -ErrorAction Stop | ConvertFrom-Json | ForEach-Object { $_ } } catch { })
+    $all = @(@($owned) + @($Updated) | Where-Object { $_ } | Sort-Object -Unique)
+    try { ConvertTo-Json -InputObject $all | Set-Content -LiteralPath $ownedPath -Encoding UTF8 } catch {}
+}
 # id -> why winget can't update it here, and what to do instead.
 $manual = [ordered]@{}
 function Add-ManualUpdate {
@@ -790,6 +813,12 @@ if ($RetryFailed) {
 }
 ConvertTo-Json -InputObject @($before.Keys) | Set-Content -LiteralPath $retryPath -Encoding UTF8
 Write-Host "[winget] $($before.Count) package(s) have upgrades available."
+if ($userMode -and -not $RetryFailed -and -not $selectionMode) {
+    $machine = @(try { (Get-PendingUpgrades -Scope 'machine').Keys } catch { })
+    if ($machine.Count) {
+        Write-Host "[portable] $($machine.Count) machine-wide app(s) also have updates, which need administrator rights: $(@($machine | Sort-Object) -join ', '). The installed Upkeep updates them."
+    }
+}
 $skipNoop = @($before.Keys | Where-Object { $noop.ContainsKey($_) -and $noop[$_] -eq $before[$_].Available })
 Start-QuickTopgrade -PendingIds @($before.Keys)
 foreach ($id in $skipNoop) {
@@ -820,7 +849,7 @@ $firstExit = @{}
 # installed. Restart the application to complete the upgrade." ChatGPT on
 # the test laptop, 2026-11-03. Windows swaps the version in when the app restarts.
 $restartPending = @{}
-if ($RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0 -or $skipNoop.Count -gt 0 -or $script:launcherNoted.Count -gt 0 -or ($env:UPKEEP_WINGET_SERIAL -ne '1' -and $before.Count -ge 2)) {
+if ($userMode -or $RetryFailed -or $selectionMode -or $ignoredIds.Count -gt 0 -or $script:versionGuarded.Count -gt 0 -or $before.ContainsKey('Balena.Etcher') -or $before.ContainsKey($script:wingetItself) -or $special.Count -gt 0 -or $skipNoop.Count -gt 0 -or $script:launcherNoted.Count -gt 0 -or ($env:UPKEEP_WINGET_SERIAL -ne '1' -and $before.Count -ge 2)) {
     $ids = @($before.Keys | Where-Object { $_ -ne 'ElectronicArts.EADesktop' -and $skipNoop -notcontains $_ })
     $script:done = 0
     $script:total = $ids.Count
@@ -920,6 +949,7 @@ ConvertTo-Json -InputObject $stuck | Set-Content -LiteralPath $retryPath -Encodi
 if ($upgraded.Count -gt 0) {
     Write-Host "[winget] Upgraded $($upgraded.Count) package(s): $($upgraded -join ', ')"
 }
+Save-WingetOwned -Updated $upgraded
 
 if ($stuck.Count -eq 0) {
     if ($upgradeExit -notin @(0, -1978335189)) {
@@ -981,6 +1011,15 @@ foreach ($id in $stuck) {
             } else {
                 $res = $deelev.Output
                 $code = $deelev.ExitCode
+                # A per-user portable package that replaces its own exe (topgrade's
+                # Self update step) fails the same check unelevated: -1978335145,
+                # "has been modified" (2026-11-23). Same answer as the elevated path.
+                if ($code -ne 0 -and $deelev.Status -ne 'TimedOut' -and
+                    ($code -eq -1978335145 -or "$res" -match 'has been modified; to override this check use --force')) {
+                    Write-Host "[winget]   $id : portable package was modified since install - retrying unelevated with --force..."
+                    $forcedDe = Invoke-Deelevated -Command "winget upgrade --id $id --exact --include-unknown --silent --disable-interactivity --accept-source-agreements --accept-package-agreements --force"
+                    if ($null -ne $forcedDe) { $res = $forcedDe.Output; $code = $forcedDe.ExitCode; $deelev = $forcedDe }
+                }
                 if ($code -eq 0) {
                     Write-Host "[winget]   $id : upgraded unelevated."
                     continue
@@ -1171,6 +1210,7 @@ if ($manualLeft.Count -gt 0) {
         Set-Content -LiteralPath $manualPath -Encoding UTF8
 }
 $updatedCount = $before.Count - $remaining.Count
+Save-WingetOwned -Updated @($before.Keys | Where-Object { -not $remaining.ContainsKey($_) })
 if ($failedLeft.Count -gt 0) {
     Write-Host "[result] WinGet: $updatedCount updated; $($failedLeft.Count) failed; $($manualLeft.Count) need a manual update. Successful updates were kept."
     Write-Host "[error] winget could not update $($failedLeft.Count) package(s): $($failedLeft -join ', ')"

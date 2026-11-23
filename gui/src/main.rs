@@ -20,7 +20,11 @@ fn run(renderer: eframe::Renderer) -> eframe::Result<()> {
         .with_inner_size([1080.0, 720.0])
         .with_min_inner_size([480.0, 360.0])
         .with_clamp_size_to_monitor_size(true)
-        .with_title("Upkeep")
+        .with_title(if dashboard_core::USER_MODE {
+            "Upkeep (portable, no administrator rights)"
+        } else {
+            "Upkeep"
+        })
         .with_icon(window_icon());
 
     let native_options = eframe::NativeOptions {
@@ -88,6 +92,11 @@ fn show_startup_error(err: &eframe::Error) {
 }
 
 fn main() {
+    // Every script the dashboard starts (the engine, the update inventory,
+    // the AI CLI check) inherits this and stays in user mode.
+    if dashboard_core::USER_MODE {
+        std::env::set_var("UPKEEP_USER_MODE", "1");
+    }
     // glow stays the default (smallest, what every release so far shipped).
     // Without a GPU driver (fresh install on "Microsoft Basic Display
     // Adapter") it fails before any window appears -- retry on wgpu/DX12,

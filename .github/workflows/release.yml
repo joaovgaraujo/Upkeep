@@ -127,6 +127,13 @@ jobs:
         shell: pwsh
         run: .\Build-Portable.ps1 -SkipCargoBuild
 
+      # The no-admin build (cargo feature "portable", asInvoker manifest),
+      # in its own target dir. Not signed: the SignPath "exe" configuration
+      # covers Upkeep.exe only.
+      - name: Build no-admin zip
+        shell: pwsh
+        run: .\Build-Portable.ps1 -NoAdmin
+
       # ---- Publish ------------------------------------------------------
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
@@ -134,11 +141,12 @@ jobs:
           subject-path: |
             dist/Upkeep-Setup.exe
             dist/Upkeep-Portable.zip
+            dist/Upkeep-NoAdmin.zip
 
       - name: Checksums
         shell: pwsh
         run: |
-          Get-FileHash dist\Upkeep-Setup.exe,dist\Upkeep-Portable.zip -Algorithm SHA256 |
+          Get-FileHash dist\Upkeep-Setup.exe,dist\Upkeep-Portable.zip,dist\Upkeep-NoAdmin.zip -Algorithm SHA256 |
             ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
             Set-Content dist\SHA256SUMS.txt
           Get-Content dist\SHA256SUMS.txt
@@ -160,4 +168,5 @@ jobs:
           files: |
             dist/Upkeep-Setup.exe
             dist/Upkeep-Portable.zip
+            dist/Upkeep-NoAdmin.zip
             dist/SHA256SUMS.txt

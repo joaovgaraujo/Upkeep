@@ -38,7 +38,8 @@ $ErrorActionPreference = 'Continue'
 $heldPath = Join-Path $env:LOCALAPPDATA 'Upkeep\choco-held-pins.json'
 $extraPath = Join-Path $env:LOCALAPPDATA 'SystemUpdate\topgrade-extra-args.txt'
 $reportDir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
-$hasChoco = [bool](Get-Command choco -ErrorAction SilentlyContinue)
+# Portable user mode skips Chocolatey entirely (pins need administrator rights).
+$hasChoco = $env:UPKEEP_USER_MODE -ne '1' -and [bool](Get-Command choco -ErrorAction SilentlyContinue)
 
 function Clear-HeldPins {
     if (-not $hasChoco -or -not (Test-Path -LiteralPath $heldPath)) { return }
@@ -92,7 +93,70 @@ foreach ($line in (choco outdated --limit-output 2>$null)) {
     $f = "$line" -split '\|'
     if ($f.Count -ge 3) { $outdated[$f[0].ToLower()] = [pscustomobject]@{ Current = $f[1]; Available = $f[2]; Pinned = ($f.Count -ge 4 -and $f[3] -eq 'true') } }
 }
-$gitPkgs = @('git.install', 'git') | Where-Object { $outdated.ContainsKey($_) -and -not $outdated[$_].Pinned }
+$held = New-Object System.Collections.ArrayList
+function Save-HeldPins {
+    if (-not $held.Count) { return }
+    New-Item -ItemType Directory -Path (Split-Path $heldPath) -Force | Out-Null
+    ConvertTo-Json -InputObject @($held) | Set-Content -LiteralPath $heldPath -Encoding UTF8
+}
+
+# ---- Apps winget already updates ---------------------------------------------
+# The same app installed by both managers was updated twice per run: winget
+# installed calibre, Wireshark, AutoHotkey, gh, Rufus and FFmpeg, and minutes
+# later Chocolatey ran each of their installers again (2026-11-23; Telegram
+# and gh on 11-17). Chocolatey's record of the app never moves when winget
+# updates it, so it always sees an update. Update-WingetApps.ps1 records every
+# package it has updated in winget-owned.json; those apps are held in choco
+# for this run. A package winget failed on, or listed as manual, this run is
+# left to Chocolatey as a second chance. UPKEEP_CHOCO_DUPLICATES=1 turns this off.
+function Get-WingetOwnedIds {
+    $ownedPath = Join-Path $env:LOCALAPPDATA 'Upkeep\winget-owned.json'
+    if ($env:UPKEEP_CHOCO_DUPLICATES -eq '1' -or -not (Test-Path -LiteralPath $ownedPath)) { return @() }
+    # ForEach-Object unrolls: Windows PowerShell 5.1 emits a JSON array as one object.
+    $owned = @(try { Get-Content -LiteralPath $ownedPath -Raw | ConvertFrom-Json | ForEach-Object { $_ } } catch { })
+    $left = @()
+    $left += @(try { Get-Content -LiteralPath (Join-Path $reportDir 'winget-failed.json') -Raw -ErrorAction Stop | ConvertFrom-Json | ForEach-Object { $_ } } catch { })
+    $left += @(try { (Get-Content -LiteralPath (Join-Path $reportDir 'manual-updates-winget.json') -Raw -ErrorAction Stop | ConvertFrom-Json) | ForEach-Object { $_.Id } } catch { })
+    @($owned | Where-Object { $_ -and $left -notcontains $_ })
+}
+# Chocolatey ids whose winget id does not end in the same name.
+$chocoAliases = @{
+    'gh' = '^GitHub\.cli$'; 'github-desktop' = '^GitHub\.GitHubDesktop$'
+    'ffmpeg' = '^Gyan\.FFmpeg$'; 'ffmpeg-full' = '^Gyan\.FFmpeg$'; 'ffmpeg-shared' = '^Gyan\.FFmpeg\.Shared$'
+    'telegram' = '^Telegram\.TelegramDesktop$'; 'vscode' = '^Microsoft\.VisualStudioCode$'
+    'nodejs' = '^OpenJS\.NodeJS$'; 'nodejs-lts' = '^OpenJS\.NodeJS\.LTS$'
+    'python' = '^Python\.Python\.3\.\d+$'; 'python3' = '^Python\.Python\.3\.\d+$'
+    'notepadplusplus' = '^Notepad\+\+\.Notepad\+\+$'; 'googlechrome' = '^Google\.Chrome$'
+    'firefox' = '^Mozilla\.Firefox$'; 'powershell-core' = '^Microsoft\.PowerShell$'
+    'ruby' = '^RubyInstallerTeam\.Ruby'; 'vlc' = '^VideoLAN\.VLC$'; 'microsoft-windows-terminal' = '^Microsoft\.WindowsTerminal$'
+}
+function Find-WingetOwner {
+    param([string]$ChocoName, [string[]]$Owned)
+    $base = $ChocoName.ToLower() -replace '\.(install|portable|app)$', ''
+    if ($chocoAliases.ContainsKey($base)) {
+        return ($Owned | Where-Object { $_ -match $chocoAliases[$base] } | Select-Object -First 1)
+    }
+    $key = $base -replace '[^a-z0-9]', ''
+    if ($key.Length -lt 3) { return $null }
+    $Owned | Where-Object { (($_ -split '\.')[-1].ToLower() -replace '[^a-z0-9]', '') -eq $key } | Select-Object -First 1
+}
+$owned = @(Get-WingetOwnedIds)
+if ($owned.Count) {
+    $left = @()
+    foreach ($name in @($outdated.Keys | Sort-Object)) {
+        if ($outdated[$name].Pinned -or $name -eq 'chocolatey') { continue }
+        $wid = Find-WingetOwner -ChocoName $name -Owned $owned
+        if (-not $wid) { continue }
+        choco pin add -n="$name" --limit-output 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { [void]$held.Add($name); $left += "$name ($wid)" }
+    }
+    if ($left.Count) {
+        Write-Host "[choco] Left to winget, which already updates these apps: $($left -join ', '). Chocolatey skips them this run."
+    }
+}
+Save-HeldPins
+
+$gitPkgs = @('git.install', 'git') | Where-Object { $outdated.ContainsKey($_) -and -not $outdated[$_].Pinned -and $held -notcontains $_ }
 if (-not $gitPkgs) { exit 0 }
 
 $gitDir = Get-GitInstallDir
@@ -100,14 +164,14 @@ $users = @(Get-FolderProcesses -Folder $gitDir)
 if (-not $users.Count) { exit 0 }
 
 $list = Format-ProcessCounts $users
-$held = @()
+$gitHeld = @()
 foreach ($pkg in $gitPkgs) {
     choco pin add -n="$pkg" --limit-output 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { $held += $pkg }
+    if ($LASTEXITCODE -eq 0) { $gitHeld += $pkg; [void]$held.Add($pkg) }
 }
-if (-not $held.Count) { exit 0 }
-New-Item -ItemType Directory -Path (Split-Path $heldPath) -Force | Out-Null
-ConvertTo-Json -InputObject @($held) | Set-Content -LiteralPath $heldPath -Encoding UTF8
+if (-not $gitHeld.Count) { exit 0 }
+Save-HeldPins
+$held = $gitHeld
 
 $main = if ($held -contains 'git.install') { 'git.install' } else { $held[0] }
 Write-Manual -Source 'choco' -Entry ([pscustomobject]@{

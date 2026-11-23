@@ -166,6 +166,12 @@ needs it. That has consequences worth understanding:
   MSIX package, which it can't upgrade a 7.6 MSI install into. Upkeep installs
   the MSIX, then removes the MSI. A download the publisher's server refuses
   (403 or 404) is listed for a manual update instead of failing winget.
+- **Shorter runs, and a version without administrator rights (1.9.8).**
+  Chocolatey no longer reinstalls an app winget has just updated, and the quick
+  topgrade steps now run alongside winget when started from the dashboard.
+  `Upkeep-NoAdmin.zip` never shows a UAC prompt. It updates apps installed for
+  your account, the Store, Steam and your developer tools, and skips Windows
+  Update, Chocolatey and apps installed for all users.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different
@@ -254,6 +260,7 @@ cd ..
 Invoke-Pester -Path .\tests    # PowerShell step tests (Pester 5.7.1, Windows PowerShell 5.1)
 
 .\Build-Portable.ps1           # dist\Upkeep-Portable.zip + dist\Upkeep\
+.\Build-Portable.ps1 -NoAdmin  # dist\Upkeep-NoAdmin.zip, never asks for admin
 .\Build-Installer.ps1          # dist\Upkeep-Setup.exe
 ```
 

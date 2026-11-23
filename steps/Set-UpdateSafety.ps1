@@ -12,7 +12,8 @@ if (Get-Command winget -ErrorAction SilentlyContinue) {
     if ($LASTEXITCODE -ne 0) { throw 'Could not block unattended EA upgrades in winget.' }
     }
 }
-if (Get-Command choco -ErrorAction SilentlyContinue) {
+# Portable user mode never touches Chocolatey: its pins need administrator rights.
+if ($env:UPKEEP_USER_MODE -ne '1' -and (Get-Command choco -ErrorAction SilentlyContinue)) {
     $packages = & choco list --exact ea-app --limit-output
     if ($LASTEXITCODE -ne 0) { throw 'Could not check EA installation in Chocolatey.' }
     if ($packages -match '^ea-app\|') {
