@@ -44,7 +44,11 @@ fn main() {
     );
     res.set(
         "OriginalFilename",
-        if portable { "Upkeep-NoAdmin.exe" } else { "Upkeep.exe" },
+        if portable {
+            "Upkeep-NoAdmin.exe"
+        } else {
+            "Upkeep.exe"
+        },
     );
     res.set("InternalName", "Upkeep");
     if let Err(e) = res.compile() {

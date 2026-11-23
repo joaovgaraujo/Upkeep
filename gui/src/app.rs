@@ -1906,7 +1906,10 @@ impl DashboardApp {
             .into_iter()
             .filter(|(page, _)| {
                 !crate::USER_MODE
-                    || !matches!(page, Page::Install | Page::NewPc | Page::Optimize | Page::System)
+                    || !matches!(
+                        page,
+                        Page::Install | Page::NewPc | Page::Optimize | Page::System
+                    )
             })
             .collect();
             // A link elsewhere may point at a page this build leaves out.
