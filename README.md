@@ -10,6 +10,21 @@ Upkeep is a Rust/egui dashboard wrapping a batch engine that drives
 Windows Update, the Microsoft Store, Steam and JDownloader. It also ships a
 new-PC path: restore point, tweaks, drivers, and an app catalog with presets.
 
+## Git on a fresh Windows 11 installation
+
+Before cloning, run `git --version`. If Windows reports **Bad Image** for a
+Git DLL such as `zlib1.dll` with status `0xc0e90002`, check **Event Viewer →
+Applications and Services Logs → Microsoft → Windows → CodeIntegrity →
+Operational**. Event 3077 with the `VerifiedAndReputableDesktop` policy
+identifies a Smart App Control block.
+
+An approved Git client or the release installer, if available, can avoid the
+need to use the blocked Git installation. If you administer the PC and choose
+to turn off Smart App Control, open **Windows Security → App & browser control →
+Smart App Control settings → Off**, then retry `git --version` and the clone.
+This changes protection for the whole PC. On a managed device, ask your
+administrator for an approved installation.
+
 ## Read this before running it
 
 **Upkeep runs elevated.** The GUI carries a `requireAdministrator` manifest and

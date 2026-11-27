@@ -361,14 +361,14 @@ if ($SkipRestorePoint) {
     try {
         Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
 
-        # Windows silently refuses a second restore point within 24h unless
-        # this frequency guard is lifted; set it to 0 like winutil does.
-        $srPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
-        # Respect Windows restore-point frequency policy.
-
-        Checkpoint-Computer -Description 'Setup-NewPC' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
-        Write-Output "[restore] Restore point created."
-        Add-PhaseResult 'Restore point' 'OK'
+        $checkpointWarnings = @()
+        Checkpoint-Computer -Description 'Setup-NewPC' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop -WarningVariable checkpointWarnings
+        if ($checkpointWarnings.Count -gt 0) {
+            Add-PhaseResult 'Restore point' 'Warning' ($checkpointWarnings -join ' ')
+        } else {
+            Write-Output "[restore] Restore point created."
+            Add-PhaseResult 'Restore point' 'OK'
+        }
     } catch {
         Write-Output "[restore] WARNING: Could not create a restore point: $($_.Exception.Message)"
         Write-Output "[restore] Continuing without one."
@@ -416,6 +416,28 @@ function Invoke-WinutilConfig {
                 # selection so a retired tweak cannot invalidate the others.
                 if ($selection -notmatch '^WPF[A-Za-z0-9_]+$' -or $winutilScript -notmatch [regex]::Escape([string]$selection)) {
                     Add-PhaseResult "Tweak $selection" 'Skipped' 'No longer available in upstream winutil; other selections continue.'
+                    continue
+                }
+                if ($selection -eq 'WPFTweaksDisableStoreSearch') {
+                    $storeState = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState'
+                    $database = Join-Path $storeState 'store.db'
+                    if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
+                        $candidates = @(Get-ChildItem -LiteralPath $storeState -File -Filter 'store-*.db' -ErrorAction SilentlyContinue |
+                            Where-Object Name -Match '^store-[0-9a-f]{32}\.db$')
+                        if ($candidates.Count -ne 1) {
+                            Add-PhaseResult "Tweak $selection" 'Skipped' "Expected one versioned Store database, found $($candidates.Count). Open Microsoft Store and retry if no database exists."
+                            continue
+                        }
+                        $database = $candidates[0].FullName
+                    }
+                    $aclBackup = Join-Path $reportDir 'store-search-acl.txt'
+                    if (-not (Test-Path -LiteralPath $aclBackup)) {
+                        & icacls.exe $database /save $aclBackup | Write-Output
+                        if ($LASTEXITCODE -ne 0) { throw "Store database ACL backup failed (icacls exit $LASTEXITCODE)." }
+                    }
+                    & icacls.exe $database /deny '*S-1-1-0:F' | Write-Output
+                    if ($LASTEXITCODE -ne 0) { throw "Store search tweak failed (icacls exit $LASTEXITCODE)." }
+                    Add-PhaseResult "Tweak $selection" 'Completed' "Store database permissions updated. Backup: $aclBackup"
                     continue
                 }
                 $singleConfig = Join-Path $reportDir 'winutil-selection.json'
