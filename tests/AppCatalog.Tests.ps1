@@ -47,6 +47,14 @@ Describe 'Presets' {
         @($preset | Where-Object { -not $catalog.PSObject.Properties[$_] }) | Should -BeNullOrEmpty
     }
 
+    It 'new-pc-basic.optional names catalog apps that the pack does not already tick' {
+        $optional = @((Get-Content -LiteralPath (Join-Path $repo 'presets\new-pc-basic.optional.json') -Raw | ConvertFrom-Json))
+        $basic = @((Get-Content -LiteralPath (Join-Path $repo 'presets\new-pc-basic.json') -Raw | ConvertFrom-Json))
+        $optional | Should -Not -BeNullOrEmpty
+        @($optional | Where-Object { -not $catalog.PSObject.Properties[$_] }) | Should -BeNullOrEmpty
+        @($optional | Where-Object { $basic -contains $_ }) | Should -BeNullOrEmpty
+    }
+
     It 'dev-machine installs Claude Code' {
         @((Get-Content -LiteralPath (Join-Path $repo 'presets\dev-machine.json') -Raw | ConvertFrom-Json)) | Should -Contain 'claude-code'
     }

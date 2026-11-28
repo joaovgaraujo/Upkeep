@@ -146,6 +146,9 @@ pub struct DashboardApp {
     bundle_apps: Vec<BundleApp>,
     /// Install page search text; filters the catalog by name, description or id.
     install_query: String,
+    /// The chosen pack's optional apps (presets/<pack>.optional.json):
+    /// shown unticked above the catalog.
+    bundle_optional: Vec<String>,
 
     log_lines: VecDeque<String>,
     update_items: Vec<crate::updates::UpdateItem>,
@@ -367,6 +370,7 @@ impl DashboardApp {
             bundle_preset: None,
             bundle_apps,
             install_query: String::new(),
+            bundle_optional: Vec::new(),
             log_lines: VecDeque::new(),
             update_items: Vec::new(),
             updates_loading: false,
@@ -1347,6 +1351,15 @@ fn load_bundle(root: &Path, preset: Option<&str>) -> Result<Vec<BundleApp>, Stri
     Ok(out)
 }
 
+/// A pack's optional extras from presets/<pack>.optional.json. These are
+/// offered unticked in the GUI; Install-Apps.ps1 -Preset never reads them.
+fn load_optional(root: &Path, preset: &str) -> Vec<String> {
+    std::fs::read_to_string(root.join("presets").join(format!("{preset}.optional.json")))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
 fn discover_presets(dir: &Path) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -1357,8 +1370,9 @@ fn discover_presets(dir: &Path) -> Vec<(String, usize)> {
                 .is_some_and(|e| e.eq_ignore_ascii_case("json"))
             {
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    // winutil-*.json are tweak configs, not app packs.
-                    if stem.starts_with("winutil") {
+                    // winutil-*.json are tweak configs, not app packs, and
+                    // <pack>.optional.json lists a pack's unticked extras.
+                    if stem.starts_with("winutil") || stem.ends_with(".optional") {
                         continue;
                     }
                     let count = std::fs::read_to_string(&path)
@@ -3836,6 +3850,7 @@ impl DashboardApp {
                     match load_bundle(&root, Some(&slug)) {
                         Ok(apps) => {
                             self.bundle_apps = apps;
+                            self.bundle_optional = load_optional(&root, &slug);
                             self.bundle_preset = Some(slug);
                         }
                         Err(e) => {
@@ -3852,6 +3867,29 @@ impl DashboardApp {
                 ui.label(egui::RichText::new(t.install_step2_hint).color(theme::subtle_text()));
                 let selected_count = self.bundle_apps.iter().filter(|a| a.selected).count();
                 let pt = lang == Lang::PtBr;
+                // The pack's optional extras, unticked, where they are seen.
+                if !self.bundle_optional.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(theme::label_strong(if pt {
+                        "Opcionais deste pacote"
+                    } else {
+                        "Optional for this pack"
+                    }));
+                    ui.horizontal_wrapped(|ui| {
+                        for slug in &self.bundle_optional {
+                            if let Some(app) = self.bundle_apps.iter_mut().find(|a| &a.slug == slug)
+                            {
+                                let desc = app.description_for(lang).to_string();
+                                let resp = ui.checkbox(&mut app.selected, app.name.clone());
+                                if !desc.is_empty() {
+                                    resp.on_hover_text(desc);
+                                }
+                                ui.add_space(12.0);
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
                 ui.horizontal_wrapped(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.install_query)

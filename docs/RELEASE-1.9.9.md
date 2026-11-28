@@ -30,6 +30,7 @@ A prefetch download is stopped after 5 minutes without growth or 30 minutes in t
 ## App catalog and new-PC setup
 
 - apps.json gains the 163 apps from winutil 26.11.13 that it did not have, plus Antigravity IDE and Antigravity CLI: 97 apps become 262, with English and Portuguese descriptions. The developer preset now installs Claude Code.
+- Essentials, the pack New-PC setup installs, is now 7-Zip, VLC, Sumatra PDF, Brave, LibreOffice and Bitwarden. PowerToys, Notepad++, EarTrumpet and RustDesk are listed in `presets/new-pc-basic.optional.json` and appear unticked under "Optional for this pack" when you pick Essentials on Install apps. Unattended setup installs only the six.
 - New-PC setup runs a pinned copy of winutil from vendor/winutil, checked against its SHA-256, instead of downloading it at run time.
 - Setup reports the state of Smart App Control and lists what it blocked during the run. The New PC page has an option, off by default, to turn it off before drivers and apps.
 
