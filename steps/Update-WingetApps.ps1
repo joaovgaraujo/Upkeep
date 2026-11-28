@@ -585,11 +585,14 @@ function Test-InstallerBusy {
 # download that has not grown for $prefetchStallSec, or is still running
 # after $prefetchMaxSec, is stopped and winget downloads that package itself
 # during the install; the step never waits on a download once the installs
-# are done. Judged by progress, not age: a slow download that was still
-# arriving used to be killed at 5 minutes and then fetched again from
-# scratch (qBittorrent, 645 s more, 2026-11-25).
+# are done. A package's files growing (a dependency or the installer
+# arriving) restarts the wait, so a multi-file download is not cut off
+# at 5 minutes. Growth is the only signal: `winget download` shows no
+# partial file while it fetches (a 350 MB installer appeared in one step,
+# 2026-11-28), and the bytes are not counted against winget.exe either,
+# so the wait cannot be shorter than the old fixed 5 minutes.
 $script:prefetch = $null
-$script:prefetchStallSec = 120
+$script:prefetchStallSec = 300
 $script:prefetchMaxSec = 1800
 if ("$env:UPKEEP_PREFETCH_STALL_SEC" -match '^\d+$') { $script:prefetchStallSec = [int]$env:UPKEEP_PREFETCH_STALL_SEC }
 # Also defined inside lane two's runspace.
@@ -606,8 +609,12 @@ $script:prefetchHelpers = {
         }
         foreach ($d in $dirs) {
             if (-not (Test-Path -LiteralPath $d)) { continue }
-            $sum = (Get-ChildItem -LiteralPath $d -File -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-            if ($sum) { $total += $sum }
+            # A directory listing shows a file that is still being written as
+            # 0 bytes until it is closed (seen with winget's .tmp download
+            # file), so each size is read from the file itself.
+            foreach ($f in @(Get-ChildItem -LiteralPath $d -File -Recurse -ErrorAction SilentlyContinue)) {
+                try { $total += ([System.IO.FileInfo]::new($f.FullName)).Length } catch {}
+            }
         }
         [long]$total
     }
@@ -633,7 +640,7 @@ $script:prefetchHelpers = {
         ($now - $seen.Grew).TotalSeconds -ge $StallSec
     }
     function Get-PrefetchStallNote([string]$Id, [int]$StallSec) {
-        "[winget]   $Id : its download made no progress for $([math]::Round($StallSec / 60, 1)) min (or ran 30 min) - stopped; winget downloads it during the install."
+        "[winget]   $Id : its download had not grown for $([math]::Round($StallSec / 60, 1)) min (or ran 30 min) - stopped; winget downloads it during the install."
     }
     # Ends the `winget download` of $Id started for this run, or all of them.
     function Stop-PrefetchDownload([string]$Root, [string]$Id) {
