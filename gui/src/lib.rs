@@ -11,6 +11,7 @@ pub const USER_MODE: bool = cfg!(feature = "portable");
 
 pub mod advice;
 pub mod app;
+pub mod capture;
 pub mod choices;
 pub mod drivers;
 pub mod engine;

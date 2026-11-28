@@ -17,6 +17,7 @@ BeforeAll {
 `$env:LOCALAPPDATA = '$case'
 `$env:APPDATA = '$case\Roaming'
 `$env:USERPROFILE = '$case\Home'
+`$env:ChocolateyInstall = '$case\chocolatey'
 $Prelude
 & '$case\$Script' $Arguments
 exit `$LASTEXITCODE

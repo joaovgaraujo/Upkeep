@@ -96,6 +96,15 @@ for /f "delims=" %%I in ('powershell -NoProfile -Command "Get-Date -Format o"') 
 
 rem -- Pre-flight: ensure winget is available -------------------------------
 if "%DASHBOARD_SKIP_APPS%"=="1" goto :after_winget_preflight
+rem    winget lives in the per-user WindowsApps folder. When that folder has
+rem    dropped out of the saved user PATH (seen 2026-11-28, cause unknown), an
+rem    elevated run builds its PATH from the registry without it and every
+rem    winget step was skipped, though winget was installed and working.
+where winget >nul 2>&1
+if %errorLevel% neq 0 if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe" (
+    set "PATH=%LOCALAPPDATA%\Microsoft\WindowsApps;%PATH%"
+    echo [setup] winget's folder is missing from your user PATH; added it for this run. Windows normally lists %%LOCALAPPDATA%%\Microsoft\WindowsApps there.
+)
 where winget >nul 2>&1
 if %errorLevel% neq 0 (
     echo [setup] winget not found. Trying to register App Installer...

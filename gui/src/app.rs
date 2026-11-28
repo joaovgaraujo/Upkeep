@@ -174,6 +174,8 @@ pub struct DashboardApp {
 
     page: Page,
     active_tab: Tab,
+    /// Developer screenshot run (UPKEEP_CAPTURE); None normally.
+    capture: Option<crate::capture::Capture>,
 
     pins: Vec<PinEntry>,
     new_pin_id: String,
@@ -263,7 +265,15 @@ impl DashboardApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
 
-        Self::from_root(&cc.egui_ctx, settings::resolve_root())
+        let mut app = Self::from_root(&cc.egui_ctx, settings::resolve_root());
+        app.capture = crate::capture::Capture::from_env();
+        if app.capture.is_some() {
+            // Not saved: the capture run must leave the user's settings alone.
+            if let Some(code) = crate::capture::Capture::theme() {
+                theme::set_choice(&cc.egui_ctx, theme::ThemeChoice::from_code(&code));
+            }
+        }
+        app
     }
 
     fn from_root(ctx: &egui::Context, root: Option<PathBuf>) -> Self {
@@ -375,6 +385,7 @@ impl DashboardApp {
             show_close_confirm: false,
             close_confirmed: false,
             page: Page::Update,
+            capture: None,
             active_tab: Tab::Log,
             pins,
             new_pin_id: String::new(),
@@ -1513,6 +1524,7 @@ impl DashboardApp {
             }
         }
 
+        self.show_capture_page();
         self.draw_top_banner(ctx);
         self.draw_nav(ctx);
         self.draw_bottom_status(ctx);
@@ -1559,6 +1571,40 @@ impl DashboardApp {
         self.draw_reboot_dialog(ctx);
         self.draw_update_confirmation(ctx);
         self.draw_nvclean_help(ctx);
+
+        if let Some(c) = self.capture.as_mut() {
+            if c.step(ctx) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// In a capture run, open the page the next screenshot is of.
+    fn show_capture_page(&mut self) {
+        let Some(name) = self.capture.as_ref().and_then(|c| c.current()) else {
+            return;
+        };
+        let (page, section, tab) = match name {
+            "install" => (Page::Install, None, None),
+            "newpc" => (Page::NewPc, None, None),
+            "optimize" => (Page::Optimize, None, None),
+            "startup" => (Page::System, Some(SystemSection::Startup), None),
+            "tasks" => (Page::System, Some(SystemSection::Tasks), None),
+            "services" => (Page::System, Some(SystemSection::Services), None),
+            "tools" => (Page::Tools, None, None),
+            "log" => (Page::Advanced, None, Some(Tab::Log)),
+            "summary" => (Page::Advanced, None, Some(Tab::Summary)),
+            "pins" => (Page::Advanced, None, Some(Tab::Pins)),
+            "drivers" => (Page::Advanced, None, Some(Tab::DriverStore)),
+            _ => (Page::Update, None, None),
+        };
+        self.page = page;
+        if let Some(s) = section {
+            self.system_section = s;
+        }
+        if let Some(t) = tab {
+            self.active_tab = t;
+        }
     }
 }
 

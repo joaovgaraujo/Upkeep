@@ -145,8 +145,15 @@ function Invoke-Deelevated {
         # `*>&1 | Out-File` binds the redirect to its LAST statement only, which
         # silently drops the output of everything before it -- and empty output
         # is exactly what makes a caller misclassify the result.
+        # The task starts with the user's saved PATH. When winget's
+        # WindowsApps folder has dropped out of it, every retry failed with
+        # "winget is not recognized" (2026-11-28), so it is put back here.
         $body = @"
 `$ErrorActionPreference = 'Continue'
+`$apps = Join-Path `$env:LOCALAPPDATA 'Microsoft\WindowsApps'
+if (-not (Get-Command winget -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path `$apps 'winget.exe'))) {
+    `$env:Path = "`$apps;`$env:Path"
+}
 `$cmd = {
 `$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 `$principal = New-Object Security.Principal.WindowsPrincipal(`$identity)
