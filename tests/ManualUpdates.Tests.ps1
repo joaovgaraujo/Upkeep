@@ -8,7 +8,7 @@ BeforeAll {
         param([string]$Script, [string]$Arguments = '', [string]$Prelude = '', [scriptblock]$Arrange = {})
         $case = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-Item $case -ItemType Directory | Out-Null
-        Copy-Item "$repoRoot\steps\$Script", "$repoRoot\steps\Deelevate.ps1", "$repoRoot\steps\InUse.ps1" $case
+        Copy-Item "$repoRoot\steps\$Script", "$repoRoot\steps\Deelevate.ps1", "$repoRoot\steps\InUse.ps1", "$repoRoot\steps\WingetOwnership.ps1" $case
         # Steps dot-source Deelevate.ps1, which would redefine Test-Elevated after
         # the prelude. CI runners are elevated, so override it in the copy itself.
         Add-Content "$case\Deelevate.ps1" 'function Test-Elevated { $false }'
