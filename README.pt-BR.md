@@ -177,6 +177,12 @@ vale entender:
   aviso do UAC. Ele atualiza os apps instalados para a sua conta, a Store, a
   Steam e suas ferramentas de desenvolvimento, e pula o Windows Update, o
   Chocolatey e os apps instalados para todos os usuários.
+- **Um painel mais calmo, 262 apps (1.9.9).** Uma só barra no topo, verde só
+  no botão principal, pesquisa em Instalar Apps, interruptores em Inicialização
+  e Serviços, e o tema Sistema segue o modo escuro do Windows. A opção 26H2 some
+  num PC que já está nela. O Chocolatey e o topgrade deixam em paz todo app que
+  o winget acompanha, e o winget é encontrado mesmo quando a pasta dele falta no
+  PATH.
 
 - **Pins: vale a pena ler este item.** Um pacote fixado ("pin") deixa de
   receber atualizações, *inclusive atualizações de segurança*. Quatro

@@ -144,6 +144,8 @@ pub struct DashboardApp {
     // Bundle chooser (preset app list with per-app selection)
     bundle_preset: Option<String>,
     bundle_apps: Vec<BundleApp>,
+    /// Install page search text; filters the catalog by name, description or id.
+    install_query: String,
 
     log_lines: VecDeque<String>,
     update_items: Vec<crate::updates::UpdateItem>,
@@ -352,7 +354,7 @@ impl DashboardApp {
             rx,
             // Both need administrator rights, which user mode never asks for.
             cat_windows_update: !crate::USER_MODE,
-            cat_feature_update: !crate::USER_MODE,
+            cat_feature_update: feature_update_offered(),
             cat_store: true,
             cat_apps: true,
             cat_steam: true,
@@ -364,6 +366,7 @@ impl DashboardApp {
             tracker: None,
             bundle_preset: None,
             bundle_apps,
+            install_query: String::new(),
             log_lines: VecDeque::new(),
             update_items: Vec::new(),
             updates_loading: false,
@@ -1435,8 +1438,9 @@ fn advice_badge(
         Some(e) => {
             let (label, color) = match e.advice {
                 Advice::Keep => (t.advice_keep, theme::status_ok()),
-                Advice::Optional => (t.advice_optional, theme::warn_amber()),
-                Advice::SafeOff => (t.advice_safeoff, theme::subtle_text()),
+                // Amber is kept for real risk; an optional item is the user's call.
+                Advice::Optional => (t.advice_optional, theme::subtle_text()),
+                Advice::SafeOff => (t.advice_safeoff, theme::text_strong()),
             };
             ui.label(egui::RichText::new(label).small().color(color))
                 .on_hover_text(e.note(lang));
@@ -1508,6 +1512,9 @@ impl DashboardApp {
         // Point the palette accessors at whichever theme egui is painting
         // with this frame -- it can change under us when the OS flips
         // light/dark while we're running.
+        if self.capture.is_none() {
+            theme::follow_system(ctx, self.theme_choice);
+        }
         theme::sync(ctx);
         self.track_ui_scale(ctx);
         self.drain_events();
@@ -1526,7 +1533,6 @@ impl DashboardApp {
 
         self.show_capture_page();
         self.draw_top_banner(ctx);
-        self.draw_nav(ctx);
         self.draw_bottom_status(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1770,159 +1776,199 @@ impl DashboardApp {
         let mut selected_theme: Option<ThemeChoice> = None;
         let mut selected_scale: Option<f32> = None;
 
-        egui::TopBottomPanel::top("top_banner").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.heading(egui::RichText::new(t.app_heading).strong());
-                ui.menu_button(t.appearance_label, |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height((ctx.screen_rect().height() - 70.0).max(80.0))
-                        .show(ui, |ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                            ui.set_max_width(
-                                (ctx.screen_rect().width() - 32.0).clamp(160.0, 320.0),
-                            );
-                            ui.label(t.language_label);
-                            let language_name = |code: &str| match code {
-                                "en" => t.language_en,
-                                "pt-BR" => t.language_pt_br,
-                                _ => t.language_system,
-                            };
-                            egui::ComboBox::from_id_salt("language")
-                                .selected_text(language_name(&self.settings.language))
-                                .show_ui(ui, |ui| {
-                                    for code in ["system", "en", "pt-BR"] {
-                                        if ui
-                                            .selectable_label(
-                                                self.settings.language == code,
-                                                language_name(code),
-                                            )
-                                            .clicked()
-                                        {
-                                            selected_lang = Some(code);
+        let header = egui::Frame::new()
+            .fill(theme::header_bg())
+            .inner_margin(egui::Margin::symmetric(16, 4));
+        egui::TopBottomPanel::top("top_banner")
+            .frame(header)
+            .show(ctx, |ui| {
+                let narrow = ui.available_width() < 720.0;
+                ui.horizontal(|ui| {
+                    // One bar: the mark and name, the page tabs, then settings
+                    // and About as icons at the right edge.
+                    let (mark, _) =
+                        ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                    ui.painter().circle_stroke(
+                        mark.center(),
+                        7.5,
+                        egui::Stroke::new(2.4_f32, theme::accent_green()),
+                    );
+                    ui.label(
+                        egui::RichText::new(t.app_heading)
+                            .font(theme::semibold(19.0))
+                            .color(theme::text_strong()),
+                    );
+                    ui.add_space(18.0);
+                    // Too narrow for tabs beside the name: they get their
+                    // own row below (a dropdown if still too narrow).
+                    if !narrow {
+                        let nav_w = ui.available_width() - 100.0;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(nav_w, 44.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| self.draw_nav_tabs(ui),
+                        );
+                    }
+                    // Push the two icons to the right edge.
+                    ui.add_space((ui.available_width() - 96.0).max(0.0));
+                    let icon = |glyph: &str| {
+                        egui::RichText::new(glyph)
+                            .size(19.0)
+                            .color(theme::subtle_text())
+                    };
+                    ui.menu_button(icon("\u{2699}"), |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height((ctx.screen_rect().height() - 70.0).max(80.0))
+                            .show(ui, |ui| {
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                                ui.set_max_width(
+                                    (ctx.screen_rect().width() - 32.0).clamp(160.0, 320.0),
+                                );
+                                ui.label(t.language_label);
+                                let language_name = |code: &str| match code {
+                                    "en" => t.language_en,
+                                    "pt-BR" => t.language_pt_br,
+                                    _ => t.language_system,
+                                };
+                                egui::ComboBox::from_id_salt("language")
+                                    .selected_text(language_name(&self.settings.language))
+                                    .show_ui(ui, |ui| {
+                                        for code in ["system", "en", "pt-BR"] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.settings.language == code,
+                                                    language_name(code),
+                                                )
+                                                .clicked()
+                                            {
+                                                selected_lang = Some(code);
+                                            }
                                         }
-                                    }
-                                });
-                            ui.separator();
-                            ui.label(t.text_size_label);
-                            let pct = |s: f32| format!("{}%", (s * 100.0).round() as i32);
-                            egui::ComboBox::from_id_salt("text_size")
-                                .selected_text(pct(self.ui_scale))
-                                .show_ui(ui, |ui| {
-                                    for scale in theme::UI_SCALES {
-                                        if ui
-                                            .selectable_label(
-                                                (self.ui_scale - scale).abs() < f32::EPSILON,
-                                                pct(scale),
-                                            )
-                                            .clicked()
-                                        {
-                                            selected_scale = Some(scale);
+                                    });
+                                ui.separator();
+                                ui.label(t.text_size_label);
+                                let pct = |s: f32| format!("{}%", (s * 100.0).round() as i32);
+                                egui::ComboBox::from_id_salt("text_size")
+                                    .selected_text(pct(self.ui_scale))
+                                    .show_ui(ui, |ui| {
+                                        for scale in theme::UI_SCALES {
+                                            if ui
+                                                .selectable_label(
+                                                    (self.ui_scale - scale).abs() < f32::EPSILON,
+                                                    pct(scale),
+                                                )
+                                                .clicked()
+                                            {
+                                                selected_scale = Some(scale);
+                                            }
                                         }
-                                    }
-                                });
-                            if ui.button(t.reset_text_size).clicked() {
-                                selected_scale = Some(theme::windows_text_scale());
-                            }
-                            ui.separator();
-                            ui.label(t.theme_label);
-                            let theme_name = |c: ThemeChoice| match c {
-                                ThemeChoice::System => t.theme_system,
-                                ThemeChoice::Light => t.theme_light,
-                                ThemeChoice::Dark => t.theme_dark,
-                            };
-                            egui::ComboBox::from_id_salt("theme")
-                                .selected_text(theme_name(self.theme_choice))
-                                .show_ui(ui, |ui| {
-                                    for choice in
-                                        [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark]
-                                    {
-                                        if ui
-                                            .selectable_label(
-                                                self.theme_choice == choice,
-                                                theme_name(choice),
-                                            )
-                                            .clicked()
-                                        {
-                                            selected_theme = Some(choice);
+                                    });
+                                if ui.button(t.reset_text_size).clicked() {
+                                    selected_scale = Some(theme::windows_text_scale());
+                                }
+                                ui.separator();
+                                ui.label(t.theme_label);
+                                let theme_name = |c: ThemeChoice| match c {
+                                    ThemeChoice::System => t.theme_system,
+                                    ThemeChoice::Light => t.theme_light,
+                                    ThemeChoice::Dark => t.theme_dark,
+                                };
+                                egui::ComboBox::from_id_salt("theme")
+                                    .selected_text(theme_name(self.theme_choice))
+                                    .show_ui(ui, |ui| {
+                                        for choice in [
+                                            ThemeChoice::System,
+                                            ThemeChoice::Light,
+                                            ThemeChoice::Dark,
+                                        ] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.theme_choice == choice,
+                                                    theme_name(choice),
+                                                )
+                                                .clicked()
+                                            {
+                                                selected_theme = Some(choice);
+                                            }
                                         }
-                                    }
-                                });
-                        });
-                });
-                ui.menu_button(
-                    if self.lang == Lang::PtBr {
+                                    });
+                            });
+                    })
+                    .response
+                    .on_hover_text(t.appearance_label);
+                    let about = if self.lang == Lang::PtBr {
                         "Sobre"
                     } else {
                         "About"
-                    },
-                    |ui| {
+                    };
+                    ui.menu_button(icon("\u{2139}"), |ui| {
                         egui::ScrollArea::vertical()
                             .max_height((ctx.screen_rect().height() - 70.0).max(80.0))
                             .show(ui, |ui| self.draw_upkeep_release(ui, ctx));
-                    },
-                );
-                if ctx.screen_rect().width() > 1000.0 {
-                    ui.label(
-                        egui::RichText::new(t.tagline)
-                            .small()
-                            .color(theme::subtle_text()),
-                    );
+                    })
+                    .response
+                    .on_hover_text(about);
+                });
+                if narrow {
+                    ui.horizontal_wrapped(|ui| self.draw_nav_tabs(ui));
                 }
-            });
-            if let Some(Ok(Some(release))) = &self.upkeep_release {
-                if release.relation == std::cmp::Ordering::Greater {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.colored_label(
-                            theme::accent_green(),
-                            if self.lang == Lang::PtBr {
-                                format!("Upkeep {} disponível", release.version)
-                            } else {
-                                format!("Upkeep {} available", release.version)
-                            },
-                        );
-                        ui.hyperlink_to(
-                            if self.lang == Lang::PtBr {
-                                "Ver release"
-                            } else {
-                                "View release"
-                            },
-                            &release.url,
-                        );
-                    });
-                }
-            }
-            if let Some(err) = &self.startup_error {
-                egui::Frame::new()
-                    .fill(theme::banner_warn_bg())
-                    .inner_margin(egui::Margin::same(8))
-                    .show(ui, |ui| {
-                        ui.colored_label(theme::warn_amber(), format!("⚠ {err}"));
-                    });
-                ui.add_space(4.0);
-            }
-
-            if self.reboot.requires_reboot() {
-                egui::Frame::new()
-                    .fill(theme::banner_caution_bg())
-                    .inner_margin(egui::Margin::same(8))
-                    .show(ui, |ui| {
+                if let Some(Ok(Some(release))) = &self.upkeep_release {
+                    if release.relation == std::cmp::Ordering::Greater {
                         ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(theme::warn_amber(), t.reboot_detected_prefix);
-                            if self.reboot.cbs {
-                                ui.colored_label(theme::warn_amber(), t.reboot_cbs);
-                            }
-                            if self.reboot.windows_update {
-                                ui.colored_label(theme::warn_amber(), t.reboot_windows_update);
-                            }
-                            if self.reboot.pending_file_rename {
-                                ui.colored_label(theme::warn_amber(), t.reboot_pending_file_rename);
-                            }
+                            ui.colored_label(
+                                theme::accent_green(),
+                                if self.lang == Lang::PtBr {
+                                    format!("Upkeep {} disponível", release.version)
+                                } else {
+                                    format!("Upkeep {} available", release.version)
+                                },
+                            );
+                            ui.hyperlink_to(
+                                if self.lang == Lang::PtBr {
+                                    "Ver release"
+                                } else {
+                                    "View release"
+                                },
+                                &release.url,
+                            );
                         });
-                    });
-                ui.add_space(4.0);
-            }
-            ui.add_space(2.0);
-        });
+                    }
+                }
+                if let Some(err) = &self.startup_error {
+                    egui::Frame::new()
+                        .fill(theme::banner_warn_bg())
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.colored_label(theme::warn_amber(), format!("⚠ {err}"));
+                        });
+                    ui.add_space(4.0);
+                }
+
+                if self.reboot.requires_reboot() {
+                    egui::Frame::new()
+                        .fill(theme::banner_caution_bg())
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.colored_label(theme::warn_amber(), t.reboot_detected_prefix);
+                                if self.reboot.cbs {
+                                    ui.colored_label(theme::warn_amber(), t.reboot_cbs);
+                                }
+                                if self.reboot.windows_update {
+                                    ui.colored_label(theme::warn_amber(), t.reboot_windows_update);
+                                }
+                                if self.reboot.pending_file_rename {
+                                    ui.colored_label(
+                                        theme::warn_amber(),
+                                        t.reboot_pending_file_rename,
+                                    );
+                                }
+                            });
+                        });
+                    ui.add_space(4.0);
+                }
+                ui.add_space(2.0);
+            });
 
         if let Some(lang) = selected_lang {
             self.set_language(lang);
@@ -1935,11 +1981,12 @@ impl DashboardApp {
         }
     }
 
-    /// Big page selector under the banner: the three things a user comes
-    /// here to do, plus Advanced for the power-user surfaces.
-    fn draw_nav(&mut self, ctx: &egui::Context) {
+    /// Page tabs inside the header bar: the things a user comes here to do,
+    /// plus Advanced for the power-user surfaces. Falls back to a dropdown
+    /// when the window is too narrow for all of them.
+    fn draw_nav_tabs(&mut self, ui: &mut egui::Ui) {
         let t = self.tr();
-        egui::TopBottomPanel::top("nav_bar").show(ctx, |ui| {
+        {
             // Installing apps, new-PC setup, tweaks and services all need
             // administrator rights; the portable build leaves those pages out.
             let pages: Vec<(Page, &str)> = [
@@ -1994,15 +2041,13 @@ impl DashboardApp {
                         });
                 });
             } else {
-                ui.horizontal(|ui| {
-                    for (page, label) in pages {
-                        if tab_button(ui, self.page == page, label, 16.0).clicked() {
-                            self.page = page;
-                        }
+                for (page, label) in pages {
+                    if tab_button(ui, self.page == page, label, 16.0).clicked() {
+                        self.page = page;
                     }
-                });
+                }
             }
-        });
+        }
     }
 
     fn check_updates(&mut self, ctx: &egui::Context) {
@@ -2370,7 +2415,7 @@ impl DashboardApp {
                                         format!("Esta execução troca {old} por {new}. A escolha fica salva para as próximas.")
                                     } else {
                                         format!("This run replaces {old} with {new}. The choice is saved for later runs.")
-                                    }).color(theme::accent_green()));
+                                    }).color(theme::subtle_text()));
                                 }
                             });
                         }
@@ -2512,43 +2557,22 @@ impl DashboardApp {
             let compact = ctx.screen_rect().height() < 650.0;
             ui.add_space(if compact { 2.0 } else { 14.0 });
             let pt = self.lang == Lang::PtBr;
-            ui.label(
-                egui::RichText::new(if pt { "Atualizações" } else { "Updates" })
-                    .size(28.0)
-                    .strong(),
-            );
+            ui.label(theme::page_title(if pt {
+                "Atualizar este PC"
+            } else {
+                "Update this PC"
+            }));
             if !compact {
                 ui.label(
                     egui::RichText::new(if pt {
-                        "Atualize o PC inteiro: apps, Windows, Store, Steam e ferramentas de desenvolvimento."
+                        "Apps, Windows, Store, Steam e ferramentas de desenvolvimento numa execução. Você revisa a lista antes de qualquer instalação."
                     } else {
-                        "Update your whole PC: apps, Windows, Store, Steam and developer tools."
+                        "Apps, Windows, the Store, Steam and developer tools in one run. You review the list before anything installs."
                     })
                     .color(theme::subtle_text()),
                 );
             }
-            ui.add_space(if compact { 2.0 } else { 10.0 });
-            ui.horizontal_wrapped(|ui| {
-                for (index, label) in if pt {
-                    ["1  Atualizar tudo", "2  Revisar", "3  Confirmar"]
-                } else {
-                    ["1  Update everything", "2  Review", "3  Confirm"]
-                }
-                .into_iter()
-                .enumerate()
-                {
-                    let active = index == usize::from(self.updates_checked);
-                    ui.label(egui::RichText::new(label).small().color(if active {
-                        theme::accent_green()
-                    } else {
-                        theme::subtle_text()
-                    }));
-                    if index < 2 {
-                        ui.label(egui::RichText::new("/").weak());
-                    }
-                }
-            });
-            ui.add_space(if compact { 4.0 } else { 12.0 });
+            ui.add_space(if compact { 4.0 } else { 16.0 });
             if !self.is_running {
                 let selected = if self.updates_checked
                     && !self.updates_loading
@@ -2619,23 +2643,10 @@ impl DashboardApp {
                     }
                 }
                 ui.add_space(8.0);
-                theme::card().show(ui, |ui| {
-                    if !self.updates_checked
-                        && !self.updates_loading
-                        && self.updates_error.is_none()
-                    {
-                        ui.strong(if pt {
-                            "Tudo incluído por padrão"
-                        } else {
-                            "Everything included by default"
-                        });
-                        ui.label(if pt {
-                            "Confira os apps disponíveis e revise a atualização completa. Nada será instalado antes de confirmar."
-                        } else {
-                            "Check available apps and review the full update. Nothing installs until you confirm."
-                        });
-                        ui.add_space(10.0);
-                    }
+                theme::card()
+                    .inner_margin(egui::Margin::same(20))
+                    .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     if !self.updates_checked {
                         let label = if self.updates_loading {
                             if pt {
@@ -2644,23 +2655,49 @@ impl DashboardApp {
                                 "Checking..."
                             }
                         } else if pt {
-                            "Atualizar tudo"
+                            "Verificar atualizações"
                         } else {
-                            "Update everything"
+                            "Check for updates"
                         };
-                        if ui
-                            .add_enabled(
-                                !self.updates_loading && self.root.is_some(),
-                                egui::Button::new(
-                                    egui::RichText::new(label)
-                                        .strong()
-                                        .color(theme::on_accent()),
-                                )
-                                .fill(theme::accent_green())
-                                .min_size(egui::vec2(ui.available_width(), 42.0)),
-                            )
-                            .clicked()
-                        {
+                        let mut clicked = false;
+                        ui.horizontal_wrapped(|ui| {
+                            // Text on the left, the one green button on the right.
+                            let button_w = 230.0;
+                            ui.allocate_ui_with_layout(
+                                egui::vec2((ui.available_width() - button_w).max(240.0), 0.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.label(theme::section_title(if pt {
+                                        "Tudo incluído por padrão"
+                                    } else {
+                                        "Everything is included by default"
+                                    }));
+                                    ui.label(
+                                        egui::RichText::new(if pt {
+                                            "Upkeep lista o que tem atualização. Nada é instalado antes de você confirmar."
+                                        } else {
+                                            "Upkeep lists what has an update. Nothing installs until you confirm."
+                                        })
+                                        .color(theme::subtle_text()),
+                                    );
+                                },
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                clicked = ui
+                                    .add_enabled(
+                                        !self.updates_loading && self.root.is_some(),
+                                        egui::Button::new(
+                                            egui::RichText::new(label)
+                                                .font(theme::semibold(16.0))
+                                                .color(theme::on_accent()),
+                                        )
+                                        .fill(theme::accent_green())
+                                        .min_size(egui::vec2(180.0, 44.0)),
+                                    )
+                                    .clicked();
+                            });
+                        });
+                        if clicked {
                             self.update_plan = Some(crate::updates::UpdatePlan {
                                 windows: self.cat_windows_update,
                                 feature: self.cat_feature_update,
@@ -2686,29 +2723,94 @@ impl DashboardApp {
                     ui.add_enabled_ui(!self.updates_loading, |ui| self.draw_update_picker(ui, ctx));
                 });
                 ui.add_space(8.0);
-                theme::card().show(ui, |ui| {
-                    ui.strong(if pt { "Incluído na atualização" } else { "Included in this update" });
-                    ui.label(if pt { "Estes serviços detectam e atualizam seus itens ao executar. Desmarque apenas o que quiser excluir." } else { "These services detect and update their items when run. Uncheck anything you want to exclude." });
-                    ui.add_space(6.0);
-                    if crate::USER_MODE {
-                        self.cat_windows_update = false;
-                        self.cat_feature_update = false;
-                        ui.colored_label(theme::warn_amber(), if pt { "Versão portátil, sem direitos de administrador: Windows Update, Chocolatey, apps instalados para todos os usuários e serviços ficam de fora." } else { "Portable version, no administrator rights: Windows Update, Chocolatey, apps installed for all users and services are left out." });
-                    }
-                    ui.add_enabled_ui(!crate::USER_MODE, |ui| {
-                        ui.checkbox(&mut self.cat_windows_update, "Windows Update");
-                        ui.checkbox(&mut self.cat_feature_update, t.cat_feature_update);
-                    });
-                    if self.cat_feature_update {
-                        ui.colored_label(theme::warn_amber(), t.cat_feature_update_warn);
-                    }
-                    ui.checkbox(&mut self.cat_store, "Microsoft Store");
-                    ui.checkbox(&mut self.cat_steam, if pt { "Steam e jogos" } else { "Steam and games" });
-                    ui.checkbox(&mut self.run_other_apps, if pt { "Ferramentas de desenvolvimento e outros atualizadores" } else { "Developer tools and other updaters" });
-                    if self.run_other_apps {
-                        ui.colored_label(theme::warn_amber(), if pt { "Esta opção usa Chocolatey, Topgrade e launchers. Eles podem atualizar apps desmarcados na lista acima." } else { "This uses Chocolatey, Topgrade and launchers. They may update apps unchecked in the list above." });
+                ui.add_space(8.0);
+                ui.label(theme::section_title(if pt {
+                    "O que a execução cobre"
+                } else {
+                    "What the run covers"
+                }));
+                ui.label(
+                    egui::RichText::new(if pt {
+                        "Cada item encontra e atualiza o que tem. Desmarque o que quiser deixar de fora."
+                    } else {
+                        "Each one finds and updates what it covers. Untick anything to leave it out."
+                    })
+                    .color(theme::subtle_text()),
+                );
+                ui.add_space(4.0);
+                if crate::USER_MODE {
+                    self.cat_windows_update = false;
+                    self.cat_feature_update = false;
+                    ui.label(egui::RichText::new(if pt { "Versão portátil, sem direitos de administrador: Windows Update, Chocolatey, apps instalados para todos os usuários e serviços ficam de fora." } else { "Portable version, no administrator rights: Windows Update, Chocolatey, apps installed for all users and services are left out." }).color(theme::subtle_text()));
+                }
+                ui.add_enabled_ui(!crate::USER_MODE, |ui| {
+                    source_row(
+                        ui,
+                        &mut self.cat_windows_update,
+                        "Windows Update",
+                        if pt {
+                            "Atualizações de segurança e qualidade. Nada reinicia sozinho."
+                        } else {
+                            "Security and quality updates. Nothing restarts on its own."
+                        },
+                        None,
+                    );
+                    // Already on 26H2 or later: nothing to offer.
+                    if !windows_at_feature_target() {
+                        source_row(
+                            ui,
+                            &mut self.cat_feature_update,
+                            t.cat_feature_update,
+                            t.cat_feature_update_warn,
+                            Some(if pt {
+                                "Requer reinício"
+                            } else {
+                                "Restart needed"
+                            }),
+                        );
                     }
                 });
+                source_row(
+                    ui,
+                    &mut self.cat_store,
+                    "Microsoft Store",
+                    if pt {
+                        "Apps e jogos da Store."
+                    } else {
+                        "Store apps and games."
+                    },
+                    None,
+                );
+                source_row(
+                    ui,
+                    &mut self.cat_steam,
+                    if pt {
+                        "Steam e jogos"
+                    } else {
+                        "Steam and games"
+                    },
+                    if pt {
+                        "Jogos instalados, atualizados pelo Steam."
+                    } else {
+                        "Installed games, updated through Steam."
+                    },
+                    None,
+                );
+                source_row(
+                    ui,
+                    &mut self.run_other_apps,
+                    if pt {
+                        "Ferramentas de desenvolvimento e outros atualizadores"
+                    } else {
+                        "Developer tools and other updaters"
+                    },
+                    if pt {
+                        "Chocolatey (só o que o WinGet não acompanha), topgrade e launchers. Podem atualizar apps desmarcados na lista acima."
+                    } else {
+                        "Chocolatey (only what winget doesn't track), topgrade and launchers. They can update apps unticked in the list above."
+                    },
+                    None,
+                );
                 ui.add_space(12.0);
                 ui.collapsing(if pt { "Mais opções" } else { "More options" }, |ui| {
                     ui.collapsing(if pt { "Apps ignorados" } else { "Ignored apps" }, |ui| {
@@ -3082,7 +3184,7 @@ impl DashboardApp {
     fn draw_system_page(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let t = self.tr();
         ui.add_space(6.0);
-        ui.label(egui::RichText::new(t.system_title).size(22.0).strong());
+        ui.label(theme::page_title(t.system_title));
         ui.label(egui::RichText::new(t.system_subtitle).color(theme::subtle_text()));
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
@@ -3257,17 +3359,16 @@ impl DashboardApp {
                             let (s, secs) = &rows[row.index()];
                             row.col(|ui| {
                                 let this_busy = busy.as_deref() == Some(s.name.as_str());
-                                let (label, color) = if this_busy {
-                                    ("...", theme::subtle_text())
-                                } else if s.enabled() {
-                                    (t.startup_on, theme::accent_green())
+                                let label = if s.enabled() {
+                                    t.startup_on
                                 } else {
-                                    (t.startup_off, theme::subtle_text())
+                                    t.startup_off
                                 };
-                                let button = egui::Button::new(
-                                    egui::RichText::new(label).strong().color(color),
-                                )
-                                .min_size(egui::vec2(72.0, 20.0));
+                                let button = Switch {
+                                    on: s.enabled(),
+                                    busy: this_busy,
+                                    label,
+                                };
                                 let mut resp = ui.add_enabled(busy.is_none(), button);
                                 if !s.enabled() && kept.keeps_task(s) {
                                     resp = resp.on_hover_text(t.kept_off_hover);
@@ -3286,9 +3387,7 @@ impl DashboardApp {
                                 let text = if s.enabled() {
                                     egui::RichText::new(&s.name)
                                 } else {
-                                    egui::RichText::new(&s.name)
-                                        .strikethrough()
-                                        .color(theme::subtle_text())
+                                    egui::RichText::new(&s.name).color(theme::subtle_text())
                                 };
                                 ui.add(egui::Label::new(text).truncate())
                                     .on_hover_text(format!("{}{}", s.path, s.name));
@@ -3483,7 +3582,7 @@ impl DashboardApp {
         let t = self.tr();
         centered_column(ui, 720.0, |ui| {
             ui.add_space(14.0);
-            ui.label(egui::RichText::new(t.tools_title).size(26.0).strong());
+            ui.label(theme::page_title(t.tools_title));
             ui.label(egui::RichText::new(t.tools_subtitle).color(theme::subtle_text()));
             ui.add_space(10.0);
 
@@ -3683,7 +3782,7 @@ impl DashboardApp {
         let lang = self.lang;
         centered_column(ui, 860.0, |ui| {
             ui.add_space(14.0);
-            ui.label(egui::RichText::new(t.install_title).size(26.0).strong());
+            ui.label(theme::page_title(t.install_title));
             ui.label(egui::RichText::new(t.install_subtitle).color(theme::subtle_text()));
             ui.add_space(10.0);
 
@@ -3717,7 +3816,7 @@ impl DashboardApp {
                                 ui.label(
                                     egui::RichText::new(format!("{count} {}", t.pack_apps_suffix))
                                         .small()
-                                        .color(theme::accent_green()),
+                                        .color(theme::subtle_text()),
                                 );
                             });
                         })
@@ -3752,7 +3851,16 @@ impl DashboardApp {
                 ui.add_space(10.0);
                 ui.label(egui::RichText::new(t.install_step2_hint).color(theme::subtle_text()));
                 let selected_count = self.bundle_apps.iter().filter(|a| a.selected).count();
+                let pt = lang == Lang::PtBr;
                 ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.install_query)
+                            .hint_text(if pt { "Pesquisar apps" } else { "Search apps" })
+                            .desired_width(280.0_f32.min(ui.available_width())),
+                    );
+                    if !self.install_query.is_empty() && ui.small_button("\u{2715}").clicked() {
+                        self.install_query.clear();
+                    }
                     if ui.small_button(t.bundle_select_all).clicked() {
                         for a in &mut self.bundle_apps {
                             a.selected = true;
@@ -3763,95 +3871,118 @@ impl DashboardApp {
                             a.selected = false;
                         }
                     }
+                    ui.label(
+                        egui::RichText::new(if pt {
+                            format!("{selected_count} selecionados")
+                        } else {
+                            format!("{selected_count} selected")
+                        })
+                        .color(theme::subtle_text()),
+                    );
                 });
+                let query = self.install_query.trim().to_lowercase();
+                let matches = |a: &BundleApp| {
+                    query.is_empty()
+                        || a.name.to_lowercase().contains(&query)
+                        || a.winget.to_lowercase().contains(&query)
+                        || a.description_for(lang).to_lowercase().contains(&query)
+                };
+                let shown = self.bundle_apps.iter().filter(|a| matches(a)).count();
+                if shown == 0 {
+                    ui.label(
+                        egui::RichText::new(if pt {
+                            "Nenhum app corresponde à pesquisa."
+                        } else {
+                            "No app matches the search."
+                        })
+                        .color(theme::subtle_text()),
+                    );
+                }
 
-                theme::card().show(ui, |ui| {
-                    // Columns per category: name + visible description, with
-                    // full details (ids, category) on hover. At least 2; more
-                    // on a wide window so a long catalog doesn't turn into
-                    // one tall, mostly-empty-on-the-sides scroll.
-                    const MIN_COL_W: f32 = 300.0;
-                    let cols = ((ui.available_width() - 36.0) / MIN_COL_W)
-                        .floor()
-                        .clamp(2.0, 4.0) as usize;
-                    let col_w = ((ui.available_width() - 36.0).max(0.0) / cols as f32).max(0.0);
-                    let apps = &mut self.bundle_apps;
-                    let mut i = 0;
-                    while i < apps.len() {
-                        let cat = apps[i].category.clone();
-                        let end = apps[i..]
-                            .iter()
-                            .position(|a| a.category != cat)
-                            .map_or(apps.len(), |p| i + p);
-                        ui.add_space(6.0);
-                        ui.label(
-                            egui::RichText::new(i18n::category_display(lang, &cat))
-                                .strong()
-                                .color(theme::accent_green()),
-                        );
-                        egui::Grid::new(format!("apps_grid_{cat}"))
-                            .num_columns(cols)
-                            .min_col_width(col_w)
-                            .max_col_width(col_w)
-                            .spacing([12.0, 4.0])
-                            .show(ui, |ui| {
-                                for (j, app) in apps[i..end].iter_mut().enumerate() {
-                                    ui.vertical(|ui| {
-                                        ui.set_width(col_w);
-                                        // The whole name flips to bold green
-                                        // when checked, so the state change is
-                                        // obvious beyond the small checkmark.
-                                        let name = if app.selected {
-                                            egui::RichText::new(&app.name)
-                                                .strong()
-                                                .color(theme::accent_green())
-                                        } else {
-                                            egui::RichText::new(&app.name)
-                                        };
-                                        let desc = app.description_for(lang).to_string();
-                                        let mut hover = desc.clone();
-                                        if !app.winget.is_empty() && app.winget != "na" {
-                                            hover.push_str(&format!("\n\nwinget: {}", app.winget));
-                                        }
-                                        if !app.choco.is_empty() && app.choco != "na" {
-                                            hover.push_str(&format!("\nchoco: {}", app.choco));
-                                        }
-                                        let resp = ui.checkbox(&mut app.selected, name);
-                                        if !hover.is_empty() {
-                                            resp.on_hover_text(&hover);
-                                        }
-                                        if !desc.is_empty() {
-                                            let d = ui.horizontal_wrapped(|ui| {
-                                                ui.add_space(24.0);
-                                                // Explicit wrap, not truncate: this
-                                                // is the app's whole visible
-                                                // description, not just a hint, so
-                                                // cutting it off with an ellipsis
-                                                // lost information a user needs to
-                                                // pick apps by. Labels inside a
-                                                // horizontal layout don't wrap on
-                                                // their own.
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        egui::RichText::new(&desc)
-                                                            .small()
-                                                            .color(theme::subtle_text()),
+                if shown > 0 {
+                    theme::card().show(ui, |ui| {
+                        // Columns per category: name + visible description, with
+                        // full details (ids, category) on hover. At least 2; more
+                        // on a wide window so a long catalog doesn't turn into
+                        // one tall, mostly-empty-on-the-sides scroll.
+                        const MIN_COL_W: f32 = 300.0;
+                        let cols = ((ui.available_width() - 36.0) / MIN_COL_W)
+                            .floor()
+                            .clamp(2.0, 4.0) as usize;
+                        let col_w = ((ui.available_width() - 36.0).max(0.0) / cols as f32).max(0.0);
+                        let apps = &mut self.bundle_apps;
+                        let mut i = 0;
+                        while i < apps.len() {
+                            let cat = apps[i].category.clone();
+                            let end = apps[i..]
+                                .iter()
+                                .position(|a| a.category != cat)
+                                .map_or(apps.len(), |p| i + p);
+                            if !apps[i..end].iter().any(&matches) {
+                                i = end;
+                                continue;
+                            }
+                            ui.add_space(6.0);
+                            ui.label(theme::section_title(i18n::category_display(lang, &cat)));
+                            egui::Grid::new(format!("apps_grid_{cat}"))
+                                .num_columns(cols)
+                                .min_col_width(col_w)
+                                .max_col_width(col_w)
+                                .spacing([12.0, 4.0])
+                                .show(ui, |ui| {
+                                    for (j, app) in
+                                        apps[i..end].iter_mut().filter(|a| matches(a)).enumerate()
+                                    {
+                                        ui.vertical(|ui| {
+                                            ui.set_width(col_w);
+                                            // Names are semibold whether ticked or
+                                            // not; the larger checkbox shows the state.
+                                            let name = theme::label_strong(&app.name);
+                                            let desc = app.description_for(lang).to_string();
+                                            let mut hover = desc.clone();
+                                            if !app.winget.is_empty() && app.winget != "na" {
+                                                hover.push_str(&format!(
+                                                    "\n\nwinget: {}",
+                                                    app.winget
+                                                ));
+                                            }
+                                            if !app.choco.is_empty() && app.choco != "na" {
+                                                hover.push_str(&format!("\nchoco: {}", app.choco));
+                                            }
+                                            let resp = ui.checkbox(&mut app.selected, name);
+                                            if !hover.is_empty() {
+                                                resp.on_hover_text(&hover);
+                                            }
+                                            if !desc.is_empty() {
+                                                // Indented under the name, directly
+                                                // below it (a horizontal row would
+                                                // add a full control height of gap).
+                                                // Wrapped, not truncated: this is the
+                                                // app's whole visible description.
+                                                ui.spacing_mut().item_spacing.y = 0.0;
+                                                let d = desc_pad().show(ui, |ui| {
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(&desc)
+                                                                .small()
+                                                                .color(theme::subtle_text()),
+                                                        )
+                                                        .wrap(),
                                                     )
-                                                    .wrap(),
-                                                )
-                                            });
-                                            d.inner.on_hover_text(&hover);
+                                                });
+                                                d.inner.on_hover_text(&hover);
+                                            }
+                                        });
+                                        if (j + 1) % cols == 0 {
+                                            ui.end_row();
                                         }
-                                    });
-                                    if (j + 1) % cols == 0 {
-                                        ui.end_row();
                                     }
-                                }
-                                ui.end_row();
-                            });
-                        i = end;
-                    }
-                });
+                                    ui.end_row();
+                                });
+                            i = end;
+                        }
+                    });
+                }
 
                 ui.add_space(8.0);
                 let install_label = i18n::bundle_install_selected(lang, selected_count);
@@ -3930,7 +4061,7 @@ impl DashboardApp {
         let lang = self.lang;
         centered_column(ui, 760.0, |ui| {
             ui.add_space(14.0);
-            ui.label(egui::RichText::new(t.setup_title).size(26.0).strong());
+            ui.label(theme::page_title(t.setup_title));
             ui.label(egui::RichText::new(t.setup_subtitle).color(theme::subtle_text()));
             ui.add_space(10.0);
 
@@ -4102,7 +4233,7 @@ impl DashboardApp {
         let lang = self.lang;
         centered_column(ui, 820.0, |ui| {
             ui.add_space(14.0);
-            ui.label(egui::RichText::new(t.optimize_title).size(26.0).strong());
+            ui.label(theme::page_title(t.optimize_title));
             ui.label(egui::RichText::new(t.optimize_subtitle).color(theme::subtle_text()));
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
@@ -4958,17 +5089,16 @@ impl DashboardApp {
                                     return;
                                 }
                                 let this_busy = busy.as_deref() == Some(s.name.as_str());
-                                let (label, color) = if this_busy {
-                                    ("...", theme::subtle_text())
-                                } else if s.enabled {
-                                    (t.startup_on, theme::accent_green())
+                                let label = if s.enabled {
+                                    t.startup_on
                                 } else {
-                                    (t.startup_off, theme::subtle_text())
+                                    t.startup_off
                                 };
-                                let button = egui::Button::new(
-                                    egui::RichText::new(label).strong().color(color),
-                                )
-                                .min_size(egui::vec2(72.0, 20.0));
+                                let button = Switch {
+                                    on: s.enabled,
+                                    busy: this_busy,
+                                    label,
+                                };
                                 let hover = if !s.enabled && kept.keeps_startup(s) {
                                     t.kept_off_hover
                                 } else {
@@ -4997,9 +5127,7 @@ impl DashboardApp {
                                 let text = if s.enabled {
                                     egui::RichText::new(&s.name)
                                 } else {
-                                    egui::RichText::new(&s.name)
-                                        .strikethrough()
-                                        .color(theme::subtle_text())
+                                    egui::RichText::new(&s.name).color(theme::subtle_text())
                                 };
                                 ui.add(egui::Label::new(text).truncate())
                                     .on_hover_text(&s.location);
@@ -5358,16 +5486,190 @@ fn summary_value_is_benign(v: &str) -> bool {
 /// which is filled from `visuals.selection.bg_fill` -- also green. Green on
 /// green left the label of the *currently open* tab almost unreadable in both
 /// themes, which is the one label that most needs to be legible.
+/// Build of Windows 11 26H2. Must match `-TargetBuild` in
+/// steps/Invoke-FeatureUpdate.ps1, which skips the upgrade at or above it.
+const FEATURE_TARGET_BUILD: u32 = 26300;
+
+/// True when this PC already runs the feature-update target or later, so
+/// the 26H2 option is neither shown nor ticked.
+fn windows_at_feature_target() -> bool {
+    theme::windows_build().is_some_and(|b| b >= FEATURE_TARGET_BUILD)
+}
+
+/// Whether the 26H2 step starts ticked: it needs administrator rights and
+/// a PC that isn't on 26H2 yet.
+fn feature_update_offered() -> bool {
+    !crate::USER_MODE && !windows_at_feature_target()
+}
+
+/// One full-width option: a checkbox, a semibold name with a one-line
+/// explanation under it, and an optional risk tag (amber, outlined) at the
+/// right. The name and explanation toggle the box too.
+fn source_row(ui: &mut egui::Ui, checked: &mut bool, title: &str, desc: &str, tag: Option<&str>) {
+    egui::Frame::new()
+        .fill(theme::card_bg())
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::symmetric(14, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.checkbox(checked, "");
+                let tag_w = if tag.is_some() { 150.0 } else { 0.0 };
+                let mut toggle = false;
+                ui.allocate_ui_with_layout(
+                    egui::vec2((ui.available_width() - tag_w).max(120.0), 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        let a = ui.add(
+                            egui::Label::new(theme::label_strong(title))
+                                .wrap()
+                                .sense(egui::Sense::click()),
+                        );
+                        let b = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(desc)
+                                    .small()
+                                    .color(theme::subtle_text()),
+                            )
+                            .wrap()
+                            .sense(egui::Sense::click()),
+                        );
+                        toggle = a.clicked() || b.clicked();
+                    },
+                );
+                if toggle && ui.is_enabled() {
+                    *checked = !*checked;
+                }
+                if let Some(tag) = tag {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::Button::new(
+                                egui::RichText::new(tag).small().color(theme::warn_amber()),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .stroke(egui::Stroke::new(1.0_f32, theme::warn_amber()))
+                            .corner_radius(egui::CornerRadius::same(12))
+                            .min_size(egui::vec2(0.0, 26.0))
+                            .sense(egui::Sense::hover()),
+                        );
+                    });
+                }
+            });
+        });
+    ui.add_space(2.0);
+}
+
+/// An on/off switch with its state written beside it ("On" / "Off"), so the
+/// state does not rest on color alone. While a change is in flight it shows
+/// "..." and draws the knob in the middle.
+struct Switch<'a> {
+    on: bool,
+    busy: bool,
+    label: &'a str,
+}
+
+impl egui::Widget for Switch<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let label = if self.busy { "..." } else { self.label };
+        let galley = egui::WidgetText::from(egui::RichText::new(label).small()).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Body,
+        );
+        let track = egui::vec2(34.0, 18.0);
+        let size = egui::vec2(track.x + 8.0 + galley.size().x.max(26.0), track.y.max(20.0));
+        let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let enabled = ui.is_enabled();
+            let track_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.left(), rect.center().y - track.y / 2.0),
+                track,
+            );
+            let (fill, knob) = if self.on && !self.busy {
+                (theme::accent_green(), theme::on_accent())
+            } else {
+                (theme::surface_hi(), theme::text_strong())
+            };
+            let fill = if enabled {
+                fill
+            } else {
+                fill.gamma_multiply(0.5)
+            };
+            let painter = ui.painter();
+            painter.rect(
+                track_rect,
+                egui::CornerRadius::same(9),
+                fill,
+                egui::Stroke::new(1.0_f32, if self.on { fill } else { theme::card_stroke() }),
+                egui::StrokeKind::Inside,
+            );
+            let t = if self.busy {
+                0.5
+            } else {
+                ui.ctx().animate_bool(resp.id, self.on)
+            };
+            let x = egui::lerp(track_rect.left() + 9.0..=track_rect.right() - 9.0, t);
+            painter.circle_filled(egui::pos2(x, track_rect.center().y), 6.5, knob);
+            if resp.has_focus() {
+                painter.rect_stroke(
+                    track_rect.expand(2.0),
+                    egui::CornerRadius::same(11),
+                    egui::Stroke::new(1.5_f32, theme::text_strong()),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            painter.galley(
+                egui::pos2(
+                    track_rect.right() + 8.0,
+                    rect.center().y - galley.size().y / 2.0,
+                ),
+                galley,
+                theme::subtle_text(),
+            );
+        }
+        resp.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), self.on, label)
+        });
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    }
+}
+
+/// A tab: plain text, the selected one in the strong color, semibold and
+/// underlined. Green is kept for the main action, so tabs don't use it.
 fn tab_button(ui: &mut egui::Ui, selected: bool, label: &str, size: f32) -> egui::Response {
-    let text = egui::RichText::new(label).size(size);
-    let resp = if selected {
-        ui.add(
-            egui::Button::new(text.strong().color(theme::on_accent())).fill(theme::accent_green()),
-        )
+    let text = if selected {
+        egui::RichText::new(label)
+            .font(theme::semibold(size))
+            .color(theme::text_strong())
     } else {
-        ui.add(egui::Button::selectable(false, text))
+        egui::RichText::new(label)
+            .size(size)
+            .color(theme::subtle_text())
     };
-    ui.add_space(4.0);
+    let resp = ui.add(
+        egui::Button::new(text)
+            .frame(false)
+            .min_size(egui::vec2(0.0, 40.0)),
+    );
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if selected || resp.hovered() {
+        let r = resp.rect;
+        let color = if selected {
+            theme::text_strong()
+        } else {
+            theme::card_stroke()
+        };
+        ui.painter().line_segment(
+            [
+                egui::pos2(r.left() + 4.0, r.bottom()),
+                egui::pos2(r.right() - 4.0, r.bottom()),
+            ],
+            egui::Stroke::new(2.0_f32, color),
+        );
+    }
+    ui.add_space(2.0);
     resp
 }
 
@@ -5433,14 +5735,9 @@ fn explained_phase(
                 // Title and description are click targets too — but NOT the
                 // whole card: a full-frame interact would steal clicks from
                 // the collapsible list / radio buttons inside `extra`.
-                let text = if *checked {
-                    egui::RichText::new(title)
-                        .size(16.0)
-                        .strong()
-                        .color(theme::accent_green())
-                } else {
-                    egui::RichText::new(title).size(16.0).strong()
-                };
+                // The checkbox and the card's raised surface show the state;
+                // the title stays readable either way.
+                let text = theme::label_strong(title);
                 let title_resp = ui.add(egui::Label::new(text).wrap().sense(egui::Sense::click()));
                 let desc_resp = ui.add(
                     egui::Label::new(
@@ -5491,14 +5788,7 @@ fn option_row(
     caution_badge: Option<&str>,
 ) {
     ui.horizontal(|ui| {
-        let text = if *checked {
-            egui::RichText::new(title)
-                .strong()
-                .color(theme::accent_green())
-        } else {
-            egui::RichText::new(title).strong()
-        };
-        ui.checkbox(checked, text);
+        ui.checkbox(checked, theme::label_strong(title));
         if let Some(badge) = caution_badge {
             ui.label(
                 egui::RichText::new(badge)
@@ -5507,15 +5797,21 @@ fn option_row(
             );
         }
     });
-    ui.horizontal(|ui| {
-        ui.add_space(24.0);
-        // Explicit wrap: labels inside a horizontal layout don't wrap on
-        // their own, which let long explanations stretch the whole card.
+    ui.spacing_mut().item_spacing.y = 0.0;
+    desc_pad().show(ui, |ui| {
         ui.add(
             egui::Label::new(egui::RichText::new(why).small().color(theme::subtle_text())).wrap(),
         );
     });
-    ui.add_space(4.0);
+    ui.add_space(10.0);
+}
+
+/// Left padding that lines a description up under its checkbox label.
+fn desc_pad() -> egui::Frame {
+    egui::Frame::new().inner_margin(egui::Margin {
+        left: 30,
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
@@ -5556,7 +5852,7 @@ mod tests {
                 let output = ctx.run(input, |ctx| app.draw(ctx));
                 for clipped in output.shapes {
                     if let egui::epaint::Shape::Text(text) = clipped.shape {
-                        if text.galley.text() == app.tr().appearance_label {
+                        if text.galley.text() == "\u{2699}" {
                             button_pos = Some(text.visual_bounding_rect().center());
                         }
                         if text.galley.text() == app.tr().language_label {
@@ -5807,7 +6103,7 @@ mod tests {
         assert!(app.cat_store && app.cat_apps && app.cat_steam);
         // The portable build never asks for administrator rights.
         assert_eq!(app.cat_windows_update, !crate::USER_MODE);
-        assert_eq!(app.cat_feature_update, !crate::USER_MODE);
+        assert_eq!(app.cat_feature_update, feature_update_offered());
         assert!(app.run_other_apps);
         assert!(!app.is_running);
     }

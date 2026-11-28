@@ -1,6 +1,8 @@
-//! Two-palette theme: a dark "slate/graphite" look and a matching light one,
-//! both built on egui's own visuals, with a green accent reserved for the
-//! primary (Run) action.
+//! Two-palette theme: a dark graphite look and a matching light one, both
+//! built on egui's own visuals. Green is reserved for the main action and
+//! for success; selection (tabs, rows) is a neutral raised surface with an
+//! underline, and amber only marks real risk. Text is Segoe UI, loaded from
+//! Windows' own font folder (see `install_fonts`).
 //!
 //! Both palettes are registered with egui up front via `set_visuals_of`, so
 //! egui itself flips chrome (panels, widgets, text) when the OS theme changes
@@ -41,6 +43,9 @@ pub struct Palette {
     pub banner_caution_bg: Color32,
     pub banner_ok_bg: Color32,
 
+    /// The header and status bars.
+    pub header_bg: Color32,
+
     // egui `Visuals` inputs, kept here so both palettes are described in one
     // place.
     window_bg: Color32,
@@ -55,20 +60,20 @@ pub struct Palette {
 }
 
 pub const DARK: Palette = Palette {
-    card_bg: Color32::from_rgb(0x22, 0x24, 0x28),
-    card_bg_selected: Color32::from_rgb(0x24, 0x30, 0x26),
-    card_stroke: Color32::from_rgb(0x3a, 0x3d, 0x42),
+    card_bg: Color32::from_rgb(0x1d, 0x20, 0x24),
+    card_bg_selected: Color32::from_rgb(0x26, 0x2a, 0x2f),
+    card_stroke: Color32::from_rgb(0x2c, 0x30, 0x36),
 
-    subtle_text: Color32::from_gray(0x9a),
+    subtle_text: Color32::from_rgb(0xa3, 0xa9, 0xb1),
     log_default: Color32::from_gray(0xc8),
 
-    accent_green: Color32::from_rgb(0x43, 0xa0, 0x47),
+    accent_green: Color32::from_rgb(0x3a, 0x9a, 0x47),
     // Deepened rather than lightened on hover. The obvious dark-theme move is
     // to lighten (#4caf50), but white label text only reaches 2.78:1 on that,
     // below the 3.0 the tests enforce - the base green is already near the
     // edge at 3.30, so there is no headroom upward.
-    accent_green_hover: Color32::from_rgb(0x3d, 0x92, 0x41),
-    accent_green_dim: Color32::from_rgb(0x2e, 0x5c, 0x31),
+    accent_green_hover: Color32::from_rgb(0x34, 0x8a, 0x40),
+    accent_green_dim: Color32::from_rgb(0x2a, 0x5c, 0x30),
 
     status_idle: Color32::from_gray(0x7a),
     status_running: Color32::from_rgb(0x5c, 0x9c, 0xe6),
@@ -81,13 +86,15 @@ pub const DARK: Palette = Palette {
     banner_caution_bg: Color32::from_rgb(0x3a, 0x30, 0x10),
     banner_ok_bg: Color32::from_rgb(0x1d, 0x30, 0x22),
 
-    window_bg: Color32::from_rgb(0x17, 0x18, 0x1a),
-    panel_bg: Color32::from_rgb(0x1e, 0x20, 0x23),
-    surface: Color32::from_rgb(0x26, 0x28, 0x2c),
-    surface_hi: Color32::from_rgb(0x2f, 0x31, 0x36),
-    stroke: Color32::from_rgb(0x3a, 0x3d, 0x42),
-    text: Color32::from_rgb(0xe4, 0xe4, 0xe6),
-    code_bg: Color32::from_rgb(0x14, 0x15, 0x17),
+    header_bg: Color32::from_rgb(0x1b, 0x1d, 0x21),
+
+    window_bg: Color32::from_rgb(0x12, 0x14, 0x17),
+    panel_bg: Color32::from_rgb(0x15, 0x17, 0x1a),
+    surface: Color32::from_rgb(0x26, 0x2a, 0x2f),
+    surface_hi: Color32::from_rgb(0x30, 0x35, 0x3b),
+    stroke: Color32::from_rgb(0x3a, 0x3f, 0x46),
+    text: Color32::from_rgb(0xe8, 0xea, 0xed),
+    code_bg: Color32::from_rgb(0x12, 0x14, 0x17),
     text_strong: Color32::WHITE,
 };
 
@@ -97,10 +104,10 @@ pub const DARK: Palette = Palette {
 /// unreadable.
 pub const LIGHT: Palette = Palette {
     card_bg: Color32::from_rgb(0xff, 0xff, 0xff),
-    card_bg_selected: Color32::from_rgb(0xe6, 0xf3, 0xe8),
-    card_stroke: Color32::from_rgb(0xd0, 0xd4, 0xda),
+    card_bg_selected: Color32::from_rgb(0xee, 0xf0, 0xf3),
+    card_stroke: Color32::from_rgb(0xdd, 0xe1, 0xe6),
 
-    subtle_text: Color32::from_gray(0x5e),
+    subtle_text: Color32::from_rgb(0x5b, 0x62, 0x6b),
     log_default: Color32::from_rgb(0x24, 0x26, 0x2a),
 
     accent_green: Color32::from_rgb(0x2e, 0x7d, 0x32),
@@ -121,11 +128,13 @@ pub const LIGHT: Palette = Palette {
     banner_caution_bg: Color32::from_rgb(0xfc, 0xf6, 0xdc),
     banner_ok_bg: Color32::from_rgb(0xe4, 0xf4, 0xe7),
 
+    header_bg: Color32::from_rgb(0xff, 0xff, 0xff),
+
     window_bg: Color32::from_rgb(0xff, 0xff, 0xff),
-    panel_bg: Color32::from_rgb(0xf1, 0xf3, 0xf5),
-    surface: Color32::from_rgb(0xe5, 0xe8, 0xec),
-    surface_hi: Color32::from_rgb(0xd8, 0xdc, 0xe2),
-    stroke: Color32::from_rgb(0xc2, 0xc7, 0xce),
+    panel_bg: Color32::from_rgb(0xf5, 0xf6, 0xf8),
+    surface: Color32::from_rgb(0xee, 0xf0, 0xf3),
+    surface_hi: Color32::from_rgb(0xe2, 0xe6, 0xea),
+    stroke: Color32::from_rgb(0xc9, 0xce, 0xd5),
     text: Color32::from_rgb(0x1c, 0x1e, 0x21),
     code_bg: Color32::from_rgb(0xec, 0xee, 0xf1),
     text_strong: Color32::BLACK,
@@ -178,7 +187,78 @@ color_accessors!(
     banner_warn_bg,
     banner_caution_bg,
     banner_ok_bg,
+    header_bg,
+    surface_hi,
 );
+
+/// Text color of the strongest emphasis (selected tab, headings).
+pub fn text_strong() -> Color32 {
+    palette().text
+}
+
+const SEMIBOLD: &str = "semibold";
+
+/// Font for titles: Segoe UI Semibold when Windows has it.
+pub fn semibold(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(SEMIBOLD.into()))
+}
+
+/// Page title, the same on every page.
+pub fn page_title(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .font(semibold(28.0))
+        .color(text_strong())
+}
+
+/// Section title inside a page (cards, groups).
+pub fn section_title(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .font(semibold(18.0))
+        .color(text_strong())
+}
+
+/// Bold label inside a row or card.
+pub fn label_strong(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .font(semibold(16.0))
+        .color(text_strong())
+}
+
+/// Segoe UI from Windows' font folder, ahead of egui's own fonts (kept as
+/// fallbacks for symbols and emoji). Read at startup, never bundled: it is
+/// Windows' font, not ours to ship. When a file is missing (not Windows, a
+/// trimmed install), egui's font is used and only the look changes.
+fn install_fonts(ctx: &egui::Context) {
+    use egui::{FontData, FontDefinitions, FontFamily};
+    use std::sync::Arc;
+    let dir = std::env::var_os("WINDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("C:/Windows"))
+        .join("Fonts");
+    let read = |name: &str| std::fs::read(dir.join(name)).ok();
+    let mut fonts = FontDefinitions::default();
+    if let Some(bytes) = read("segoeui.ttf") {
+        fonts
+            .font_data
+            .insert("segoe".into(), Arc::new(FontData::from_owned(bytes)));
+        if let Some(list) = fonts.families.get_mut(&FontFamily::Proportional) {
+            list.insert(0, "segoe".into());
+        }
+    }
+    let mut titles = Vec::new();
+    if let Some(bytes) = read("seguisb.ttf") {
+        fonts.font_data.insert(
+            "segoe-semibold".into(),
+            Arc::new(FontData::from_owned(bytes)),
+        );
+        titles.push("segoe-semibold".to_string());
+    }
+    titles.extend(fonts.families[&FontFamily::Proportional].iter().cloned());
+    fonts
+        .families
+        .insert(FontFamily::Name(SEMIBOLD.into()), titles);
+    ctx.set_fonts(fonts);
+}
 
 /// Reserved for a future hovered-Run-button treatment.
 #[allow(dead_code)]
@@ -202,12 +282,13 @@ pub fn card() -> egui::Frame {
         .inner_margin(egui::Margin::same(14))
 }
 
-/// Card variant with the selected/accent border.
+/// Card variant for a ticked option: a raised surface and a stronger edge,
+/// not the accent (green stays for the main action).
 pub fn card_selected() -> egui::Frame {
     let p = palette();
     egui::Frame::new()
         .fill(p.card_bg_selected)
-        .stroke(Stroke::new(1.5_f32, p.accent_green))
+        .stroke(Stroke::new(1.0_f32, p.subtle_text))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(egui::Margin::same(14))
 }
@@ -292,9 +373,70 @@ impl ThemeChoice {
 }
 
 /// Apply the user's theme choice. Safe to call every time it changes.
+///
+/// For "System" the Windows setting is read from the registry and applied
+/// as an explicit Light or Dark. egui's own System mode depends on the
+/// windowing layer reporting the OS theme, and when it doesn't, the app
+/// stayed light on a PC set to dark. [`follow_system`] re-reads it so a
+/// change in Windows settings shows up while Upkeep is open.
 pub fn set_choice(ctx: &egui::Context, choice: ThemeChoice) {
-    ctx.set_theme(choice.preference());
+    let preference = match (choice, windows_prefers_dark()) {
+        (ThemeChoice::System, Some(true)) => egui::ThemePreference::Dark,
+        (ThemeChoice::System, Some(false)) => egui::ThemePreference::Light,
+        _ => choice.preference(),
+    };
+    ctx.set_theme(preference);
     sync(ctx);
+}
+
+/// While the choice is "System", re-read the Windows setting every couple
+/// of seconds (a registry read; cheap) and switch if it changed.
+pub fn follow_system(ctx: &egui::Context, choice: ThemeChoice) {
+    static LAST_CHECK: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    if choice != ThemeChoice::System {
+        return;
+    }
+    let now = std::time::Instant::now();
+    if let Ok(mut last) = LAST_CHECK.lock() {
+        if last.is_some_and(|t| now.duration_since(t).as_secs() < 2) {
+            return;
+        }
+        *last = Some(now);
+    }
+    if let Some(dark) = windows_prefers_dark() {
+        let want = if dark { Theme::Dark } else { Theme::Light };
+        if ctx.theme() != want {
+            set_choice(ctx, choice);
+        }
+    }
+    ctx.request_repaint_after(std::time::Duration::from_secs(2));
+}
+
+/// The Windows build this PC runs (`CurrentBuild`), read once. `None` when
+/// the registry value is missing or unreadable.
+pub fn windows_build() -> Option<u32> {
+    static BUILD: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *BUILD.get_or_init(|| {
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+        use winreg::RegKey;
+        RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+            .and_then(|key| key.get_value::<String, _>("CurrentBuild"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+    })
+}
+
+/// Windows' "app mode" setting (Settings > Personalization > Colors):
+/// `Some(true)` for dark. `None` when the value is missing.
+pub fn windows_prefers_dark() -> Option<bool> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        .and_then(|key| key.get_value::<u32, _>("AppsUseLightTheme"))
+        .ok()
+        .map(|light| light == 0)
 }
 
 /// Register both palettes and the shared type scale/spacing. Called once at
@@ -303,6 +445,7 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(Theme::Dark, visuals(&DARK, egui::Visuals::dark()));
     ctx.set_visuals_of(Theme::Light, visuals(&LIGHT, egui::Visuals::light()));
     sync(ctx);
+    install_fonts(ctx);
 
     // Larger, friendlier type scale and roomier spacing than egui defaults.
     // Sized for a 14" 1080p laptop at 100% Windows scaling, where the old
@@ -316,14 +459,14 @@ pub fn apply(ctx: &egui::Context) {
         use egui::{FontFamily, FontId, TextStyle};
         style.text_styles.insert(
             TextStyle::Heading,
-            FontId::new(26.0, FontFamily::Proportional),
+            FontId::new(26.0, FontFamily::Name(SEMIBOLD.into())),
         );
         style
             .text_styles
-            .insert(TextStyle::Body, FontId::new(16.5, FontFamily::Proportional));
+            .insert(TextStyle::Body, FontId::new(16.0, FontFamily::Proportional));
         style.text_styles.insert(
             TextStyle::Button,
-            FontId::new(16.5, FontFamily::Proportional),
+            FontId::new(16.0, FontFamily::Proportional),
         );
         // Small is used for captions, the "what it does" lines and table
         // cells - it was the worst offender at 12.5.
@@ -337,6 +480,10 @@ pub fn apply(ctx: &egui::Context) {
         );
         style.spacing.item_spacing = egui::vec2(10.0, 9.0);
         style.spacing.button_padding = egui::vec2(14.0, 8.0);
+        // Checkboxes and radios large enough to see and hit.
+        style.spacing.icon_width = 20.0;
+        style.spacing.icon_width_inner = 11.0;
+        style.spacing.interact_size.y = 30.0;
     });
 }
 
@@ -391,8 +538,9 @@ fn visuals(p: &Palette, base: egui::Visuals) -> egui::Visuals {
     visuals.extreme_bg_color = p.window_bg;
     visuals.faint_bg_color = p.surface;
     visuals.code_bg_color = p.code_bg;
-    visuals.selection.bg_fill = p.accent_green_dim;
-    visuals.selection.stroke = Stroke::new(1.0f32, p.accent_green);
+    // Selection is neutral: green stays for the main action and success.
+    visuals.selection.bg_fill = p.surface_hi;
+    visuals.selection.stroke = Stroke::new(1.0f32, p.text);
     visuals.hyperlink_color = p.status_running;
     visuals.warn_fg_color = p.warn_amber;
     visuals.error_fg_color = p.status_error;
@@ -410,12 +558,12 @@ fn visuals(p: &Palette, base: egui::Visuals) -> egui::Visuals {
     visuals.widgets.hovered.bg_fill = p.surface_hi;
     visuals.widgets.hovered.weak_bg_fill = p.surface_hi;
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0f32, p.text_strong);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0f32, p.accent_green);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0f32, p.subtle_text);
 
     visuals.widgets.active.bg_fill = p.surface_hi;
     visuals.widgets.active.weak_bg_fill = p.surface_hi;
     visuals.widgets.active.fg_stroke = Stroke::new(1.0f32, p.text_strong);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0f32, p.accent_green);
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0f32, p.text);
 
     // egui's light default draws selected/open widgets nearly white-on-white;
     // reuse the active treatment so open combo boxes stay visible.

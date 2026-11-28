@@ -177,6 +177,11 @@ needs it. That has consequences worth understanding:
   `Upkeep-NoAdmin.zip` never shows a UAC prompt. It updates apps installed for
   your account, the Store, Steam and your developer tools, and skips Windows
   Update, Chocolatey and apps installed for all users.
+- **A calmer dashboard, 262 apps (1.9.9).** One header bar, green only for the
+  main button, a search box on Install apps, switches on Startup & Services,
+  and the System theme follows Windows' dark setting. The 26H2 option is hidden
+  on a PC that already has it. Chocolatey and topgrade leave alone every app
+  winget tracks, and winget is found even when its folder is missing from PATH.
 
 - **Pins: read this one.** A pinned package stops receiving updates,
   *including security updates*. Four packages ship pinned, for two different

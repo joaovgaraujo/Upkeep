@@ -376,13 +376,13 @@ pub struct Strings {
 
 pub static EN: Strings = Strings {
     tagline: "Keep your PC updated and set up new ones in a few clicks.",
-    nav_update: "\u{1F504} Update",
-    nav_install: "\u{1F4E6} Install Apps",
-    nav_newpc: "\u{1F5A5} New PC",
-    nav_optimize: "\u{1F680} Optimize",
-    nav_system: "\u{1F6A6} Startup",
-    nav_tools: "\u{1F527} Tools",
-    nav_advanced: "\u{2699} Advanced",
+    nav_update: "Update",
+    nav_install: "Install apps",
+    nav_newpc: "New PC",
+    nav_optimize: "Optimize",
+    nav_system: "Startup",
+    nav_tools: "Tools",
+    nav_advanced: "Advanced",
 
     update_title: "Keep your PC up to date",
     update_subtitle: "Pick what to update and press the big green button. Everything runs by itself; you can minimize this window and you'll get a notification when it's done.",
@@ -407,8 +407,8 @@ pub static EN: Strings = Strings {
     pack_basic_desc: "The basics for any PC: browser, video player, PDF reader, archiver and more.",
     pack_dev_name: "Developer setup",
     pack_dev_desc: "Git, editors, languages and tools for a development machine.",
-    pack_full_name: "Everything",
-    pack_full_desc: "The complete catalog: pick and choose from all available apps.",
+    pack_full_name: "Broad set",
+    pack_full_desc: "Common apps from every category. Search below for the rest of the catalog.",
     pack_generic_desc: "A custom app pack.",
     pack_apps_suffix: "apps",
 
@@ -645,13 +645,13 @@ pub static EN: Strings = Strings {
 
 pub static PT_BR: Strings = Strings {
     tagline: "Mantenha seu PC atualizado e configure PCs novos em poucos cliques.",
-    nav_update: "\u{1F504} Atualizar",
-    nav_install: "\u{1F4E6} Instalar Apps",
-    nav_newpc: "\u{1F5A5} PC Novo",
-    nav_optimize: "\u{1F680} Otimizar",
-    nav_system: "\u{1F6A6} Inicializa\u{e7}\u{e3}o",
-    nav_tools: "\u{1F527} Ferramentas",
-    nav_advanced: "\u{2699} Avan\u{e7}ado",
+    nav_update: "Atualizar",
+    nav_install: "Instalar Apps",
+    nav_newpc: "PC Novo",
+    nav_optimize: "Otimizar",
+    nav_system: "Inicializa\u{e7}\u{e3}o",
+    nav_tools: "Ferramentas",
+    nav_advanced: "Avan\u{e7}ado",
 
     update_title: "Mantenha seu PC em dia",
     update_subtitle: "Escolha o que atualizar e aperte o bot\u{e3}o verde. Tudo roda sozinho; voc\u{ea} pode minimizar esta janela e receber\u{e1} uma notifica\u{e7}\u{e3}o ao terminar.",
@@ -676,8 +676,8 @@ pub static PT_BR: Strings = Strings {
     pack_basic_desc: "O b\u{e1}sico para qualquer PC: navegador, player de v\u{ed}deo, leitor de PDF, compactador e mais.",
     pack_dev_name: "Setup de desenvolvedor",
     pack_dev_desc: "Git, editores, linguagens e ferramentas para uma m\u{e1}quina de desenvolvimento.",
-    pack_full_name: "Tudo",
-    pack_full_desc: "O cat\u{e1}logo completo: escolha entre todos os apps dispon\u{ed}veis.",
+    pack_full_name: "Conjunto amplo",
+    pack_full_desc: "Apps comuns de todas as categorias. Pesquise abaixo para ver o resto do cat\u{e1}logo.",
     pack_generic_desc: "Um pacote de apps personalizado.",
     pack_apps_suffix: "apps",
 
