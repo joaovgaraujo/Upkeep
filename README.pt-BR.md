@@ -11,21 +11,6 @@ Windows Update, a Microsoft Store, Steam e JDownloader. Também traz um
 caminho para PC novo: ponto de restauração, ajustes, drivers e um catálogo de
 apps com predefinições.
 
-## Git em uma instalação nova do Windows 11
-
-Antes de clonar, execute `git --version`. Se o Windows exibir **Bad Image**
-para uma DLL do Git, como `zlib1.dll`, com o código `0xc0e90002`, confira
-o log **Microsoft → Windows → CodeIntegrity → Operational** no Visualizador
-de Eventos. O evento 3077 com a política `VerifiedAndReputableDesktop`
-identifica um bloqueio do Smart App Control.
-
-Use um cliente Git aprovado ou o instalador da versão, se disponível.
-Se você administra o PC e optar por desativar o Smart App Control, abra
-**Segurança do Windows → Controle de aplicativos e navegador → Configurações
-do Smart App Control → Desativado**. Depois, execute `git --version` e
-tente clonar novamente. Essa configuração afeta a proteção de todo o PC.
-Em um dispositivo gerenciado, peça uma instalação aprovada ao administrador.
-
 ## Leia antes de rodar
 
 **O Upkeep roda com privilégios de administrador.** A interface carrega um
@@ -33,12 +18,15 @@ manifesto `requireAdministrator` e o motor herda essa elevação, porque
 instalar atualizações no sistema todo exige isso. Isso tem consequências que
 vale entender:
 
-- **Executa scripts remotos como administrador.** O caminho de ajustes
-  "winutil" usa por padrão `irm https://christitus.com/win | iex`, e o
-  Chocolatey é instalado a partir de
-  `community.chocolatey.org/install.ps1`. Ambos são os métodos de instalação
-  documentados pelos próprios projetos, e ambos só rodam quando você aciona,
-  mas são execução remota de código como administrador, e você deve estar
+- **Executa scripts de terceiros como administrador.** Os ajustes de PC novo
+  e Otimizar usam o [winutil](https://github.com/ChrisTitusTech/winutil)
+  fixado na versão em `vendor/winutil`, conferido pelo SHA-256 de `pin.json`
+  antes de cada execução. Assim, uma versão nova do winutil não muda o que um
+  ajuste faz até a versão fixada ser trocada (`vendor/winutil/Update-Winutil.ps1`, que
+  também roda `tests/Winutil.Tests.ps1`). A ferramenta "Abrir winutil" ainda
+  abre o `irm https://christitus.com/win | iex` atual. O Chocolatey é
+  instalado a partir de `community.chocolatey.org/install.ps1`. É código
+  remoto rodando como administrador, acionado por você, e você deve estar
   confortável com isso antes de usar esses recursos.
 - **Instala automaticamente as ferramentas** de que depende: Chocolatey,
   topgrade e o módulo do PowerShell `PSWindowsUpdate`.
@@ -222,6 +210,21 @@ que falta:
   DirectX 12, que também roda no renderizador por software do Windows.
   Qualquer outra falha ao abrir mostra uma caixa de erro, em vez de a janela
   simplesmente nunca aparecer.
+- **Controle Inteligente de Aplicativos (Smart App Control).** Numa
+  instalação nova do Windows 11 ele começa em modo de avaliação e pode se
+  ligar sozinho; ligado, bloqueia instaladores, drivers e DLLs sem assinatura
+  ou recém-lançados. O Git, por exemplo, pode falhar com **Imagem Incorreta**
+  em `zlib1.dll` e o código `0xc0e90002`. A configuração informa o estado a
+  cada execução e lista os arquivos bloqueados durante ela (evento 3077 do
+  CodeIntegrity, política `VerifiedAndReputableDesktop`). Marque **Desligar o
+  Controle Inteligente de Aplicativos** na página PC novo (ou use
+  `-DisableSmartAppControl`) para desligá-lo antes de instalar drivers e
+  apps; o estado anterior fica salvo no relatório. Se o Windows continuar
+  aplicando o bloqueio até reiniciar, a configuração avisa e oferece a
+  reinicialização. Isso reduz a proteção do PC inteiro: versões recentes do
+  Windows 11 permitem religar em **Segurança do Windows > Controle de
+  aplicativos e do navegador**; as antigas, só reinstalando. Num PC
+  gerenciado, peça ao administrador.
 - **Reinicialização pendente (Windows Update).** Os poucos ajustes do winutil
   que passam pelo serviço de manutenção do Windows (remoção do Recall,
   limpeza de componentes, armazenamento reservado, recursos opcionais) ficam

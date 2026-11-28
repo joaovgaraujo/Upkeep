@@ -67,6 +67,8 @@ Copy-Item (Join-Path $root 'apps.json') $dist
 Copy-Item (Join-Path $root 'skill-sources.json') $dist
 Copy-Item (Join-Path $root 'presets\*.json') (Join-Path $dist 'presets')
 Copy-Item (Join-Path $root 'presets\*.cfg') (Join-Path $dist 'presets')
+New-Item -ItemType Directory -Path (Join-Path $dist 'vendor\winutil') -Force | Out-Null
+Copy-Item (Join-Path $root 'vendor\winutil\*') (Join-Path $dist 'vendor\winutil')
 Copy-Item (Join-Path $root 'Install-Apps.ps1') $dist
 Copy-Item (Join-Path $root 'Export-InstalledApps.ps1') $dist
 Copy-Item (Join-Path $root 'Setup-NewPC.ps1') $dist

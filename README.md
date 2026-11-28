@@ -10,33 +10,23 @@ Upkeep is a Rust/egui dashboard wrapping a batch engine that drives
 Windows Update, the Microsoft Store, Steam and JDownloader. It also ships a
 new-PC path: restore point, tweaks, drivers, and an app catalog with presets.
 
-## Git on a fresh Windows 11 installation
-
-Before cloning, run `git --version`. If Windows reports **Bad Image** for a
-Git DLL such as `zlib1.dll` with status `0xc0e90002`, check **Event Viewer →
-Applications and Services Logs → Microsoft → Windows → CodeIntegrity →
-Operational**. Event 3077 with the `VerifiedAndReputableDesktop` policy
-identifies a Smart App Control block.
-
-An approved Git client or the release installer, if available, can avoid the
-need to use the blocked Git installation. If you administer the PC and choose
-to turn off Smart App Control, open **Windows Security → App & browser control →
-Smart App Control settings → Off**, then retry `git --version` and the clone.
-This changes protection for the whole PC. On a managed device, ask your
-administrator for an approved installation.
-
 ## Read this before running it
 
 **Upkeep runs elevated.** The GUI carries a `requireAdministrator` manifest and
 the engine inherits that elevation, because installing updates system-wide
 needs it. That has consequences worth understanding:
 
-- **It executes remote scripts as administrator.** The "winutil" tweak path
-  defaults to `irm https://christitus.com/win | iex`, and Chocolatey is
-  bootstrapped from `community.chocolatey.org/install.ps1`. Both are the
-  upstream projects' own documented install methods, and both are triggered
-  by you rather than run silently, but they are remote code execution as
-  admin, and you should be comfortable with that before using those features.
+- **It runs third-party scripts as administrator.** The new-PC and Optimize
+  tweaks run [winutil](https://github.com/ChrisTitusTech/winutil), pinned to
+  the release in `vendor/winutil` and checked against the SHA-256 in
+  `pin.json` before each run, so a new winutil release cannot change what a
+  tweak does until the pin is moved with `vendor/winutil/Update-Winutil.ps1`
+  (which also runs `tests/Winutil.Tests.ps1`). The "Open winutil" tool still
+  opens the
+  live `irm https://christitus.com/win | iex`. Chocolatey is bootstrapped from
+  `community.chocolatey.org/install.ps1`. These are remote code run as admin,
+  triggered by you, and you should be comfortable with that before using
+  those features.
 - **It auto-installs tooling** it depends on: Chocolatey, topgrade, and the
   `PSWindowsUpdate` PowerShell module.
 - **Game launchers started from Upkeep inherit administrator rights** for the
@@ -217,6 +207,19 @@ half ready, instead of hanging on the first thing that is missing:
   Display Adapter") the GUI falls back from OpenGL to DirectX 12, which also
   runs on Windows' software renderer. Any other startup failure shows an error
   box instead of the window silently never appearing.
+- **Smart App Control.** On a clean Windows 11 install it starts in
+  evaluation mode and can switch itself on, after which it blocks unsigned or
+  new installers, drivers and DLLs. Git, for example, can fail with **Bad
+  Image** for `zlib1.dll` and status `0xc0e90002`. Setup reports the state on
+  every run, and lists the files Smart App Control blocked during the run
+  (CodeIntegrity event 3077, policy `VerifiedAndReputableDesktop`). Tick
+  **Turn off Smart App Control** on the New PC page (or pass
+  `-DisableSmartAppControl`) to turn it off before drivers and apps are
+  installed; the previous state is saved in the report. If Windows keeps
+  enforcing it until a restart, setup says so and offers the restart. This
+  lowers protection for the whole PC: recent Windows 11 builds can turn it
+  back on in **Windows Security > App & browser control**, older ones only
+  after a reset. On a managed PC, ask your administrator instead.
 - **Restart pending (Windows Update).** The few winutil tweaks that go
   through Windows servicing (Recall removal, component cleanup, reserved
   storage, optional features) are deferred. A prompt offers restart now,

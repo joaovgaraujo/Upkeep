@@ -60,6 +60,7 @@ Source: "..\apps.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\skill-sources.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\presets\*.json"; DestDir: "{app}\presets"; Flags: ignoreversion
 Source: "..\presets\*.cfg"; DestDir: "{app}\presets"; Flags: ignoreversion
+Source: "..\vendor\winutil\*"; DestDir: "{app}\vendor\winutil"; Flags: ignoreversion
 Source: "..\Install-Apps.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Export-InstalledApps.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\Setup-NewPC.ps1"; DestDir: "{app}"; Flags: ignoreversion

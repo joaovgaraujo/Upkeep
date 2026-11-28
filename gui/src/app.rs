@@ -189,6 +189,7 @@ pub struct DashboardApp {
 
     // New PC page: which setup phases run.
     newpc_restore: bool,
+    newpc_sac_off: bool,
     newpc_tweaks: bool,
     newpc_toggles: bool,
     newpc_drivers: bool,
@@ -385,6 +386,7 @@ impl DashboardApp {
             drivers_error: None,
             nvclean_help_open: false,
             newpc_restore: true,
+            newpc_sac_off: false,
             newpc_tweaks: true,
             newpc_toggles: true,
             newpc_drivers: false,
@@ -3893,6 +3895,13 @@ impl DashboardApp {
                 t.setup_restore_desc,
                 |_| {},
             );
+            explained_phase(
+                ui,
+                &mut self.newpc_sac_off,
+                t.setup_sac_title,
+                t.setup_sac_desc,
+                |_| {},
+            );
 
             // The tweak/toggle selection is shared with the Optimize page,
             // so reviewing it in either place edits the same set.
@@ -4009,6 +4018,7 @@ impl DashboardApp {
                 self.open_update_review("ManageResume");
             }
             let any = self.newpc_restore
+                || self.newpc_sac_off
                 || self.newpc_tweaks
                 || self.newpc_toggles
                 || self.newpc_drivers
@@ -4246,6 +4256,9 @@ impl DashboardApp {
         }
         if !self.newpc_restore {
             cmd.arg("-SkipRestorePoint");
+        }
+        if self.newpc_sac_off {
+            cmd.arg("-DisableSmartAppControl");
         }
         if !self.newpc_drivers {
             cmd.arg("-SkipDrivers");

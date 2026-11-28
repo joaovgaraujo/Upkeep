@@ -20,7 +20,8 @@ pyvenv.cfg
 *.log
 *.tmp
 Logs/
-vendor/
+vendor/*
+!vendor/winutil/
 _mirror_log.txt
 dist/
 settings.json

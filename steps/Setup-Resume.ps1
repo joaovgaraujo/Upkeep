@@ -61,6 +61,9 @@ function Request-SetupResume {
     Copy-Item -LiteralPath (Join-Path $Root 'Install-Apps.ps1'), (Join-Path $Root 'Setup-NewPC.ps1') -Destination $dir
     Copy-Item -LiteralPath (Join-Path $Root 'steps') -Destination $dir -Recurse
     Copy-Item -LiteralPath (Join-Path $Root 'presets') -Destination $dir -Recurse
+    # Deferred tweaks run the pinned winutil, checked by hash on use.
+    New-Item -ItemType Directory -Path (Join-Path $dir 'vendor') | Out-Null
+    Copy-Item -LiteralPath (Join-Path $Root 'vendor\winutil') -Destination (Join-Path $dir 'vendor') -Recurse
     if (-not $Catalog) { $Catalog = Join-Path $Root 'apps.json' }
     Copy-Item -LiteralPath $Catalog -Destination (Join-Path $dir 'apps.json')
     if (Test-Path -LiteralPath (Join-Path $Root 'settings.json')) { Copy-Item -LiteralPath (Join-Path $Root 'settings.json') -Destination $dir }

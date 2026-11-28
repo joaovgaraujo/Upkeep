@@ -10,7 +10,9 @@
     records results and backups. Restart continuation requires user approval.
 
       1. Restore point   (safety net)
-      2. Windows tweaks  (winutil -Config presets\winutil-newpc.json, headless)
+         Smart App Control: reported; turned off with -DisableSmartAppControl
+      2. Windows tweaks  (pinned winutil in vendor\winutil, headless -Config
+                          presets\winutil-newpc.json)
       3. Toggles         (registry: dark theme, file extensions, mouse
                           acceleration off, num lock, sticky keys off, ...)
       4. Drivers         (SDIO -autoinstall; NVCleanstall prebuilt package
@@ -18,8 +20,15 @@
                           exists -- see NVCleanPackagePath in settings.json)
       5. Apps            (Install-Apps.ps1 -Preset <AppsPreset>)
 
-    Tool paths and the winutil bootstrap command are read from settings.json
-    next to this script (same file the dashboard uses).
+    Tool paths are read from settings.json next to this script (same file
+    the dashboard uses). winutil is NOT downloaded: the copy in
+    vendor\winutil is used after its SHA-256 is checked against pin.json.
+
+.PARAMETER DisableSmartAppControl
+    Turn Smart App Control off before drivers and apps are installed. When it
+    is on, Windows blocks many unsigned or new installers, drivers and DLLs.
+    This lowers protection for the whole PC; recent Windows 11 builds can turn
+    it back on in Windows Security, older ones only after a reset.
 
 .PARAMETER Toggles
     Comma-separated toggle slugs to apply. Default: a sensible set for a
@@ -50,6 +59,7 @@ param(
     [switch]$SkipApps,
     [switch]$NoToggles,
     [switch]$NoRebootPrompt,
+    [switch]$DisableSmartAppControl,
 
     [Parameter()]
     [string[]]$Toggles = @('file-extensions', 'long-paths'),
@@ -120,6 +130,7 @@ function Get-RelaunchArgs {
     if ($InstallDrivers)      { $argList += '-InstallDrivers' }
     if ($SkipApps)            { $argList += '-SkipApps' }
     if ($NoRebootPrompt)      { $argList += '-NoRebootPrompt' }
+    if ($DisableSmartAppControl) { $argList += '-DisableSmartAppControl' }
     if ($Oosu)                { $argList += @('-Oosu', '-OosuMode', $OosuMode) }
     if ($Toggles.Count) { $argList += @('-Toggles', "`"$($Toggles -join ',')`"") } else { $argList += '-NoToggles' }
     if ($AppsPreset)          { $argList += @('-AppsPreset', "`"$AppsPreset`"") }
@@ -193,6 +204,9 @@ $registryBackup = New-Object System.Collections.Generic.List[object]
 $deferredIds = @()
 $setupAppReport = Join-Path $reportDir 'apps.json'
 $phaseResults = New-Object System.Collections.Generic.List[object]
+$runStart = Get-Date
+$sacRestartNeeded = $false
+. (Join-Path $PSScriptRoot 'steps\Setup-Helpers.ps1')
 
 function Add-PhaseResult {
     param([string]$Phase, [string]$Status, [string]$Detail = '')
@@ -364,7 +378,12 @@ if ($SkipRestorePoint) {
         $checkpointWarnings = @()
         Checkpoint-Computer -Description 'Setup-NewPC' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop -WarningVariable checkpointWarnings
         if ($checkpointWarnings.Count -gt 0) {
-            Add-PhaseResult 'Restore point' 'Warning' ($checkpointWarnings -join ' ')
+            # Usually: Windows allows one restore point per 24 h, so it kept
+            # the recent one instead. Later phases still run.
+            $why = ($checkpointWarnings | ForEach-Object { [string]$_ }) -join ' '
+            Write-Output "[restore] WARNING: Windows did not create a new restore point: $why"
+            Write-Output "[restore] Continuing; the most recent restore point stays available."
+            Add-PhaseResult 'Restore point' 'Warning' $why
         } else {
             Write-Output "[restore] Restore point created."
             Add-PhaseResult 'Restore point' 'OK'
@@ -377,6 +396,41 @@ if ($SkipRestorePoint) {
 }
 
 # ---------------------------------------------------------------------------
+# Smart App Control (before tweaks, drivers and apps it could block)
+# ---------------------------------------------------------------------------
+try {
+    $sacState = Get-SmartAppControlState
+    if ($sacState -eq 'Unknown') {
+        Write-Output "[app-control] Smart App Control is not present on this Windows version."
+    } elseif ($sacState -eq 'Off') {
+        Write-Output "[app-control] Smart App Control is off."
+        Add-PhaseResult 'Smart App Control' 'OK' 'Off'
+    } elseif (-not $DisableSmartAppControl) {
+        if ($sacState -eq 'On') {
+            $msg = 'On: Windows may block unsigned or new installers, drivers and DLLs. Tick "Turn off Smart App Control" on the New PC page, or run setup with -DisableSmartAppControl.'
+            $sacStatus = 'Warning'
+        } else {
+            $msg = 'Evaluation mode: nothing is blocked yet, but Windows can switch it on and start blocking installers. Turn it off with -DisableSmartAppControl if installs fail.'
+            $sacStatus = 'OK'
+        }
+        Write-Output "[app-control] Smart App Control: $msg"
+        Add-PhaseResult 'Smart App Control' $sacStatus $msg
+    } elseif ($DryRun) {
+        Write-Output "[app-control] [dry-run] Would turn Smart App Control off (now: $sacState)."
+        Add-PhaseResult 'Smart App Control' 'DryRun' "Now: $sacState"
+    } else {
+        Write-Output "[app-control] Turning Smart App Control off (now: $sacState)..."
+        $sac = Disable-SmartAppControl -ReportDir $reportDir
+        Write-Output "[app-control] $($sac.Detail)"
+        Add-PhaseResult 'Smart App Control' $sac.Status $sac.Detail
+        $sacRestartNeeded = [bool]$sac.RestartNeeded
+    }
+} catch {
+    Write-Output "[app-control] WARNING: $($_.Exception.Message)"
+    Add-PhaseResult 'Smart App Control' 'Failed' $_.Exception.Message
+}
+
+# ---------------------------------------------------------------------------
 # Phase 2: winutil tweaks (headless via -Config)
 # ---------------------------------------------------------------------------
 try {
@@ -386,26 +440,17 @@ function Invoke-WinutilConfig {
     # interrupted and would block every later phase; a child can be killed.
     param([string]$ConfigPath)
 
-    $winutilCommand = Get-SettingString 'WinutilCommand' 'irm https://christitus.com/win | iex'
-    $url = $null
-    if ($winutilCommand -match '(?i)\b(?:irm|Invoke-RestMethod)\s+(\S+)') {
-        $url = $Matches[1].Trim("'`"")
-    }
-    if (-not $url) { $url = 'https://christitus.com/win' }
-
     $timeoutMin = 20
     $parsedTimeout = 0
     if ([int]::TryParse((Get-SettingString 'WinutilTimeoutMin' ''), [ref]$parsedTimeout) -and $parsedTimeout -gt 0) {
         $timeoutMin = $parsedTimeout
     }
 
-    Write-Output "[tweaks] Downloading winutil from $url and applying '$ConfigPath' (this can take several minutes, limit $timeoutMin min)..."
     try {
-        $winutilScript = Invoke-RestMethod -Uri $url -TimeoutSec 60 -ErrorAction Stop
-        $workDir = Join-Path $env:TEMP 'Upkeep'
-        New-Item -ItemType Directory -Path $workDir -Force | Out-Null
-        $winutilFile = Join-Path $workDir 'winutil.ps1'
-        Set-Content -LiteralPath $winutilFile -Value $winutilScript -Encoding UTF8
+        $pinned = Get-PinnedWinutil -Root $PSScriptRoot
+        $winutilFile = $pinned.Path
+        $winutilScript = Get-Content -LiteralPath $winutilFile -Raw
+        Write-Output "[tweaks] Applying '$ConfigPath' with winutil $($pinned.Version) (pinned copy; this can take several minutes, limit $timeoutMin min per tweak)..."
 
         $selections = @((Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json))
         $hosts = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
@@ -416,29 +461,13 @@ function Invoke-WinutilConfig {
                 # Upstream rejects the entire import on unknown IDs. Isolate each
                 # selection so a retired tweak cannot invalidate the others.
                 if ($selection -notmatch '^WPF[A-Za-z0-9_]+$' -or $winutilScript -notmatch [regex]::Escape([string]$selection)) {
-                    Add-PhaseResult "Tweak $selection" 'Skipped' 'No longer available in upstream winutil; other selections continue.'
+                    Add-PhaseResult "Tweak $selection" 'Skipped' "Not in winutil $($pinned.Version); other selections continue."
                     continue
                 }
                 if ($selection -eq 'WPFTweaksDisableStoreSearch') {
-                    $storeState = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState'
-                    $database = Join-Path $storeState 'store.db'
-                    if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
-                        $candidates = @(Get-ChildItem -LiteralPath $storeState -File -Filter 'store-*.db' -ErrorAction SilentlyContinue |
-                            Where-Object Name -Match '^store-[0-9a-f]{32}\.db$')
-                        if ($candidates.Count -ne 1) {
-                            Add-PhaseResult "Tweak $selection" 'Skipped' "Expected one versioned Store database, found $($candidates.Count). Open Microsoft Store and retry if no database exists."
-                            continue
-                        }
-                        $database = $candidates[0].FullName
-                    }
-                    $aclBackup = Join-Path $reportDir 'store-search-acl.txt'
-                    if (-not (Test-Path -LiteralPath $aclBackup)) {
-                        & icacls.exe $database /save $aclBackup | Write-Output
-                        if ($LASTEXITCODE -ne 0) { throw "Store database ACL backup failed (icacls exit $LASTEXITCODE)." }
-                    }
-                    & icacls.exe $database /deny '*S-1-1-0:F' | Write-Output
-                    if ($LASTEXITCODE -ne 0) { throw "Store search tweak failed (icacls exit $LASTEXITCODE)." }
-                    Add-PhaseResult "Tweak $selection" 'Completed' "Store database permissions updated. Backup: $aclBackup"
+                    $store = Set-StoreSearchBlocked -ReportDir $reportDir
+                    Write-Output "[tweaks] Store search: $($store.Detail)"
+                    Add-PhaseResult "Tweak $selection" $store.Status $store.Detail
                     continue
                 }
                 $selectionNumber++
@@ -448,6 +477,7 @@ function Invoke-WinutilConfig {
                 $stderrPath = "$reportPrefix.stderr.log"
                 $logDetail = "Logs: $stdoutPath and $stderrPath"
                 ConvertTo-Json -InputObject @($selection) | Set-Content -LiteralPath $singleConfig -Encoding UTF8
+                Write-Output "[tweaks] $selection ..."
                 $winutilArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$winutilFile`"", '-Config', "`"$singleConfig`"")
                 $proc = Start-Process powershell.exe -ArgumentList $winutilArgs -NoNewWindow -PassThru -ErrorAction Stop `
                     -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
@@ -458,6 +488,11 @@ function Invoke-WinutilConfig {
                         throw "Timed out after $timeoutMin minutes. Restart manually if servicing is pending, then retry. $logDetail"
                     }
                     $proc.WaitForExit()
+                    # Output goes to files so it can be checked; copy it into
+                    # the console and setup.log once the tweak finishes.
+                    foreach ($log in @($stdoutPath, $stderrPath)) {
+                        if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log | ForEach-Object { "  $_" } | Write-Output }
+                    }
                     if ($proc.ExitCode -ne 0) { throw "winutil exited $($proc.ExitCode). $logDetail" }
                     # Winutil reports warnings in its headless summary and still exits 0.
                     if (Select-String -LiteralPath $stdoutPath -Pattern '^Completed with warnings\.' -Quiet) {
@@ -907,6 +942,22 @@ if ($SkipApps) {
 }
 
 # ---------------------------------------------------------------------------
+# Smart App Control blocks during this run
+# ---------------------------------------------------------------------------
+if (-not $DryRun) {
+    $blocked = @(Get-SmartAppControlBlocks -Since $runStart)
+    if ($blocked.Count -gt 0) {
+        $list = ($blocked | Select-Object -First 10) -join ', '
+        $more = ''
+        if ($blocked.Count -gt 10) { $more = " and $($blocked.Count - 10) more" }
+        $hint = 'Run setup with "Turn off Smart App Control" ticked, restart, then use Retry failed.'
+        if ($sacRestartNeeded) { $hint = 'Restart, then use Retry failed.' }
+        Write-Output "[app-control] Smart App Control blocked $($blocked.Count) file(s): $list$more"
+        Add-PhaseResult 'Smart App Control blocks' 'Warning' "Blocked: $list$more. $hint"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 Write-Output ""
@@ -922,7 +973,7 @@ if (-not $DryRun -and -not $NoRebootPrompt) {
         . (Join-Path $PSScriptRoot 'steps\Setup-Resume.ps1')
         $appResults = @()
         if (Test-Path -LiteralPath $setupAppReport) { $appResults = @((Get-Content -LiteralPath $setupAppReport -Raw | ConvertFrom-Json)) }
-        $needsRestart = (Test-PendingReboot) -or [bool]($appResults | Where-Object { $_.ExitCode -eq 3010 }) -or [bool]($phaseResults | Where-Object { $_.Detail -match '\b3010\b' })
+        $needsRestart = $sacRestartNeeded -or (Test-PendingReboot) -or [bool]($appResults | Where-Object { $_.ExitCode -eq 3010 }) -or [bool]($phaseResults | Where-Object { $_.Detail -match '\b3010\b' })
         Request-SetupResume -Root $PSScriptRoot -Apps @(Get-RebootApps $appResults) -Tweaks $deferredIds -RestartRequired:$needsRestart
     } catch { Write-Warning "Could not arrange continuation; no restart requested: $_" }
 }
