@@ -24,6 +24,12 @@
     and runs `uv tool upgrade --all` itself, which does not need that lock.
     Only the cache cleanup is skipped.
 
+    Apps winget owns (steps\WingetOwnership.ps1): Chocolatey packages of apps
+    winget tracks are pinned for this run, unless winget failed on them, and
+    topgrade steps that replace a binary winget installed (its own
+    self_update, tailscale, wsl_update, antigravity_cli, uv) are disabled.
+    uv tools are then upgraded here, as for the cache lock above.
+
     Processes are never killed: they belong to whatever the user is doing.
 
     Release: remove only the pins Hold added, and the extra-args file. A pin
@@ -35,6 +41,7 @@ param([Parameter(Mandatory)][ValidateSet('Hold', 'Release')][string]$Action)
 
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'InUse.ps1')
+. (Join-Path $PSScriptRoot 'WingetOwnership.ps1')
 $heldPath = Join-Path $env:LOCALAPPDATA 'Upkeep\choco-held-pins.json'
 $extraPath = Join-Path $env:LOCALAPPDATA 'SystemUpdate\topgrade-extra-args.txt'
 $reportDir = Join-Path $env:LOCALAPPDATA 'Upkeep\Reports'
@@ -43,10 +50,20 @@ $hasChoco = $env:UPKEEP_USER_MODE -ne '1' -and [bool](Get-Command choco -ErrorAc
 
 function Clear-HeldPins {
     if (-not $hasChoco -or -not (Test-Path -LiteralPath $heldPath)) { return }
-    foreach ($name in @(Get-Content -LiteralPath $heldPath -Raw | ConvertFrom-Json)) {
-        if ($name) { choco pin remove -n="$name" --limit-output 2>&1 | Out-Null }
+    # Parenthesized: PS 5.1's ConvertFrom-Json emits a JSON array as one object.
+    $stuck = @()
+    foreach ($name in @((Get-Content -LiteralPath $heldPath -Raw | ConvertFrom-Json))) {
+        if (-not $name) { continue }
+        choco pin remove -n="$name" --limit-output 2>&1 | Out-Null
+        # A pin that is already gone is fine; keep the others for the next try.
+        if ($LASTEXITCODE -ne 0 -and @(choco pin list --limit-output 2>$null | Where-Object { ("$_" -split '\|')[0] -eq $name }).Count) { $stuck += $name }
     }
-    Remove-Item -LiteralPath $heldPath -Force -ErrorAction SilentlyContinue
+    if ($stuck.Count) {
+        ConvertTo-Json -InputObject @($stuck) | Set-Content -LiteralPath $heldPath -Encoding UTF8
+        Write-Host "[choco] Could not remove the temporary pin on $($stuck -join ', '); the next run tries again."
+    } else {
+        Remove-Item -LiteralPath $heldPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Write-Manual {
@@ -60,13 +77,26 @@ Remove-Item -LiteralPath $extraPath -Force -ErrorAction SilentlyContinue
 Clear-HeldPins
 if ($Action -eq 'Release') { exit 0 }
 
+# ---- topgrade steps whose binary winget owns --------------------------------
+$tracked = @(Get-WingetTrackedIds)
+$tgDisable = New-Object System.Collections.Generic.List[string]
+$uvOwner = $null
+foreach ($o in @(Get-TopgradeOwnedSteps -Tracked $tracked)) {
+    if ($o.Step -eq 'uv') { $uvOwner = $o.Owner; continue }
+    [void]$tgDisable.Add($o.Step)
+    Write-Host "[topgrade] Skipping its $($o.Step) step: $($o.Owner) already updates that app."
+}
+
 # ---- uv: running uv processes block `uv cache prune` ------------------------
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     $uvProcs = @(Get-Process -Name uv, uvx, uvw -ErrorAction SilentlyContinue)
-    if ($uvProcs.Count) {
-        New-Item -ItemType Directory -Path (Split-Path $extraPath) -Force | Out-Null
-        Set-Content -LiteralPath $extraPath -Value '--disable uv' -Encoding ascii
-        Write-Host "[uv] $(Format-ProcessCounts $uvProcs) running (uv-launched servers or tools) - they block uv's cache cleanup, so topgrade's uv step is skipped this run and uv tools are upgraded directly."
+    if ($uvProcs.Count -or $uvOwner) {
+        [void]$tgDisable.Add('uv')
+        if ($uvProcs.Count) {
+            Write-Host "[uv] $(Format-ProcessCounts $uvProcs) running (uv-launched servers or tools) - they block uv's cache cleanup, so topgrade's uv step is skipped this run and uv tools are upgraded directly."
+        } else {
+            Write-Host "[uv] $uvOwner updates uv itself, so topgrade's uv step (which runs 'uv self update') is skipped; uv tools are upgraded directly."
+        }
         # Bounded: if something does need the lock, fail in a minute, not five.
         $env:UV_LOCK_TIMEOUT = '60'
         $out = uv tool upgrade --all 2>&1 | ForEach-Object { "$_" }
@@ -82,6 +112,10 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
             Write-Host "[uv] uv tools need a manual update (exit $code) - listed at the end."
         }
     }
+}
+if ($tgDisable.Count) {
+    New-Item -ItemType Directory -Path (Split-Path $extraPath) -Force | Out-Null
+    Set-Content -LiteralPath $extraPath -Value ('--disable ' + ($tgDisable -join ' ')) -Encoding ascii
 }
 
 # ---- Git for Windows via Chocolatey ------------------------------------------
@@ -107,13 +141,17 @@ function Save-HeldPins {
 # and gh on 11-17). Chocolatey's record of the app never moves when winget
 # updates it, so it always sees an update. Update-WingetApps.ps1 records every
 # package it has updated in winget-owned.json; those apps are held in choco
-# for this run. A package winget failed on, or listed as manual, this run is
-# left to Chocolatey as a second chance. UPKEEP_CHOCO_DUPLICATES=1 turns this off.
+# for this run, and so is every other app winget tracks (winget-tracked.json,
+# from `winget list --source winget`): an app winget had no update for yet is
+# still winget's to update. A package winget failed on, or listed as manual,
+# this run is left to Chocolatey as a second chance.
+# UPKEEP_CHOCO_DUPLICATES=1 turns this off.
 function Get-WingetOwnedIds {
     $ownedPath = Join-Path $env:LOCALAPPDATA 'Upkeep\winget-owned.json'
-    if ($env:UPKEEP_CHOCO_DUPLICATES -eq '1' -or -not (Test-Path -LiteralPath $ownedPath)) { return @() }
+    if ($env:UPKEEP_CHOCO_DUPLICATES -eq '1') { return @() }
     # ForEach-Object unrolls: Windows PowerShell 5.1 emits a JSON array as one object.
-    $owned = @(try { Get-Content -LiteralPath $ownedPath -Raw | ConvertFrom-Json | ForEach-Object { $_ } } catch { })
+    $owned = @(try { Get-Content -LiteralPath $ownedPath -Raw -ErrorAction Stop | ConvertFrom-Json | ForEach-Object { $_ } } catch { })
+    $owned = @(@($owned) + @($tracked) | Where-Object { $_ } | Sort-Object -Unique)
     $left = @()
     $left += @(try { Get-Content -LiteralPath (Join-Path $reportDir 'winget-failed.json') -Raw -ErrorAction Stop | ConvertFrom-Json | ForEach-Object { $_ } } catch { })
     $left += @(try { (Get-Content -LiteralPath (Join-Path $reportDir 'manual-updates-winget.json') -Raw -ErrorAction Stop | ConvertFrom-Json) | ForEach-Object { $_.Id } } catch { })
@@ -151,7 +189,7 @@ if ($owned.Count) {
         if ($LASTEXITCODE -eq 0) { [void]$held.Add($name); $left += "$name ($wid)" }
     }
     if ($left.Count) {
-        Write-Host "[choco] Left to winget, which already updates these apps: $($left -join ', '). Chocolatey skips them this run."
+        Write-Host "[choco] Left to winget, which tracks these apps: $($left -join ', '). Chocolatey skips them this run."
     }
 }
 Save-HeldPins

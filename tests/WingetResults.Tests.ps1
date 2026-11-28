@@ -375,8 +375,8 @@ Describe 'Apps winget cannot update here are reported, not failed' {
         $r = Invoke-FakeWinget prefetch-stuck
         $watch.Elapsed.TotalSeconds | Should -BeLessThan 120
         $r.Code | Should -Be 0
-        $r.Output | Should -Match 'Fixture.App : its download had not finished after .* winget downloads it during the install'
-        $r.Output | Should -Match 'Fixture.Other : its download had not finished'
+        $r.Output | Should -Match 'Fixture.App : its download made no progress for .* winget downloads it during the install'
+        $r.Output | Should -Match 'Fixture.Other : its download made no progress'
         $r.Output | Should -Match 'Fixture.App finished in \d+s \(exit 0\)'
         $r.Output | Should -Match 'Fixture.Other finished in \d+s \(exit 0\), second lane'
         $r.Output | Should -Match 'Downloaded ahead: 0 of 2'

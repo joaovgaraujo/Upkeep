@@ -582,22 +582,58 @@ function Test-InstallerBusy {
 # run side by side, one fails with 0x80070020 "being used by another
 # process", and in a run one never returned. The installs waited 15 minutes
 # for it and the end of the step waited forever (2026-11-12 and 11-13). So a
-# download still running after $prefetchStallSec is stopped and winget
-# downloads that package itself during the install; the step never waits on
-# a download once the installs are done.
+# download that has not grown for $prefetchStallSec, or is still running
+# after $prefetchMaxSec, is stopped and winget downloads that package itself
+# during the install; the step never waits on a download once the installs
+# are done. Judged by progress, not age: a slow download that was still
+# arriving used to be killed at 5 minutes and then fetched again from
+# scratch (qBittorrent, 645 s more, 2026-11-25).
 $script:prefetch = $null
-$script:prefetchStallSec = 300
+$script:prefetchStallSec = 120
+$script:prefetchMaxSec = 1800
 if ("$env:UPKEEP_PREFETCH_STALL_SEC" -match '^\d+$') { $script:prefetchStallSec = [int]$env:UPKEEP_PREFETCH_STALL_SEC }
 # Also defined inside lane two's runspace.
 $script:prefetchHelpers = {
-    function Test-PrefetchStalled([string]$Root, [string]$Id, [int]$StallSec) {
+    # Bytes downloaded so far: `winget download` writes into its -d folder,
+    # and winget stages installers under %TEMP%\WinGet\<Id>.<Version>.
+    function Get-PrefetchBytes([string]$Root, [string]$Id) {
+        $total = 0
+        $dirs = @(Join-Path $Root $Id)
+        $stage = Join-Path $env:TEMP 'WinGet'
+        if (Test-Path -LiteralPath $stage) {
+            $dirs += @(Get-ChildItem -LiteralPath $stage -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name.StartsWith("$Id.", [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $_.FullName })
+        }
+        foreach ($d in $dirs) {
+            if (-not (Test-Path -LiteralPath $d)) { continue }
+            $sum = (Get-ChildItem -LiteralPath $d -File -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+            if ($sum) { $total += $sum }
+        }
+        [long]$total
+    }
+    function Test-PrefetchStalled([string]$Root, [string]$Id, [int]$StallSec, [int]$MaxSec = 1800) {
         if (-not $Root) { return $false }
         $mark = Join-Path $Root "$Id.started"
         if (-not (Test-Path -LiteralPath $mark)) { return $false }
-        ((Get-Date) - (Get-Item -LiteralPath $mark).LastWriteTime).TotalSeconds -ge $StallSec
+        $now = Get-Date
+        if (($now - (Get-Item -LiteralPath $mark).LastWriteTime).TotalSeconds -ge $MaxSec) { return $true }
+        # Sizes are read at most every 5 s per package; the lanes poll faster.
+        if (-not $script:prefetchSeen) { $script:prefetchSeen = @{} }
+        $seen = $script:prefetchSeen[$Id]
+        if ($seen -and ($now - $seen.Checked).TotalSeconds -lt 5) { return ($now - $seen.Grew).TotalSeconds -ge $StallSec }
+        $bytes = Get-PrefetchBytes -Root $Root -Id $Id
+        if (-not $seen) {
+            $seen = [pscustomobject]@{ Bytes = $bytes; Grew = (Get-Item -LiteralPath $mark).LastWriteTime; Checked = $now }
+            $script:prefetchSeen[$Id] = $seen
+        }
+        # Fewer bytes than before means a partial file was renamed or moved:
+        # start counting again from here rather than reading it as a stall.
+        if ($bytes -ne $seen.Bytes) { $seen.Bytes = $bytes; $seen.Grew = $now }
+        $seen.Checked = $now
+        ($now - $seen.Grew).TotalSeconds -ge $StallSec
     }
     function Get-PrefetchStallNote([string]$Id, [int]$StallSec) {
-        "[winget]   $Id : its download had not finished after $([math]::Round($StallSec / 60, 1)) min - stopped; winget downloads it during the install."
+        "[winget]   $Id : its download made no progress for $([math]::Round($StallSec / 60, 1)) min (or ran 30 min) - stopped; winget downloads it during the install."
     }
     # Ends the `winget download` of $Id started for this run, or all of them.
     function Stop-PrefetchDownload([string]$Root, [string]$Id) {
@@ -665,7 +701,7 @@ function Get-NextReady {
             if (Test-Path -LiteralPath (Join-Path $script:prefetch.Root "$id.ready")) { [void]$Ids.Remove($id); return $id }
         }
         foreach ($id in @($Ids)) {
-            if (Test-PrefetchStalled -Root $script:prefetch.Root -Id $id -StallSec $script:prefetchStallSec) {
+            if (Test-PrefetchStalled -Root $script:prefetch.Root -Id $id -StallSec $script:prefetchStallSec -MaxSec $script:prefetchMaxSec) {
                 Stop-PrefetchDownload -Root $script:prefetch.Root -Id $id
                 Write-StepOutput (Get-PrefetchStallNote -Id $id -StallSec $script:prefetchStallSec)
                 [void]$Ids.Remove($id); return $id
@@ -713,8 +749,11 @@ $script:quickSteps = [ordered]@{
     'juliaup' = '^Julialang\.'; 'julia' = '^Julialang\.'
     'pip3' = '^Python\.Python\.'; 'pnpm' = '^(pnpm\.pnpm|OpenJS\.NodeJS.*)$'
     'github_cli_extensions' = '^GitHub\.cli$'; 'github_cli_skills' = '^GitHub\.cli$'
-    'claude_code_plugins' = '^$'; 'miktex' = '^MiKTeX\.'; 'tailscale' = '^Tailscale\.Tailscale$'
+    'claude_code_plugins' = '^$'; 'miktex' = '^MiKTeX\.'
 }
+# Not tailscale: `tailscale update` replaces the binary winget installed.
+# The main topgrade run decides on it from winget's list of tracked apps
+# (steps\Protect-InUsePackages.ps1).
 $script:quick = $null
 function Start-QuickTopgrade {
     param([string[]]$PendingIds)
@@ -725,8 +764,6 @@ function Start-QuickTopgrade {
     if ($RetryFailed -or $env:DASHBOARD_SKIP_OTHER_APPS -eq '1' -or $env:UPKEEP_WINGET_SERIAL -eq '1') { return }
     if (-not (Get-Command topgrade -ErrorAction SilentlyContinue)) { return }
     $steps = @($script:quickSteps.Keys | Where-Object {
-            # tailscale update needs administrator rights.
-            if ($userMode -and $_ -eq 'tailscale') { return $false }
             $pattern = $script:quickSteps[$_]
             -not @($PendingIds | Where-Object { $_ -match $pattern }).Count
         })
@@ -810,6 +847,24 @@ if ($RetryFailed) {
 }
 Write-Host '[winget] Checking for pending upgrades...'
 $before = Get-PendingUpgrades
+# Everything winget tracks on this PC, not only what has an update now.
+# steps\Protect-InUsePackages.ps1 reads it before topgrade: Chocolatey leaves
+# those apps to winget, and topgrade skips steps that replace a binary winget
+# installed (topgrade itself, Tailscale, WSL, uv). Listed in the background
+# so it costs this step no time; the file is complete long before topgrade.
+# Started after the scan above, not during it: winget's index does not
+# take two listings at once well (UniGetUI serialises its winget calls).
+if ($TopgradeConfig -and -not $RetryFailed) {
+    $listPath = Join-Path $env:LOCALAPPDATA 'Upkeep\winget-list.txt'
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $listPath) -Force | Out-Null
+        Remove-Item -LiteralPath $listPath -ErrorAction SilentlyContinue
+        $wingetExe = (Get-Command winget -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        $null = Start-Process -FilePath $wingetExe -WindowStyle Hidden -PassThru -ErrorAction Stop `
+            -ArgumentList @('list', '--source', 'winget', '--accept-source-agreements', '--disable-interactivity') `
+            -RedirectStandardOutput $listPath -RedirectStandardError "$listPath.err"
+    } catch {}
+}
 if ($RetryFailed) {
     foreach ($key in @($before.Keys)) { if ($retryIds -notcontains $key) { $before.Remove($key) } }
 }
@@ -983,7 +1038,14 @@ foreach ($id in $stuck) {
         $successButPending += $id
         continue
     }
-    $attempt = Invoke-WingetUpgrade -Id $id
+    # The first pass already got "needs your normal user" for this package.
+    # Running the same installer elevated again only repeats that refusal
+    # (1-3 s each, 3-6 packages a run), so go straight to the unelevated retry.
+    if ($firstExit.ContainsKey($id) -and (Test-RequiresNormalUser -ExitCode $firstExit[$id] -Output '')) {
+        $attempt = [pscustomobject]@{ Output = "first attempt exited $($firstExit[$id])"; ExitCode = $firstExit[$id] }
+    } else {
+        $attempt = Invoke-WingetUpgrade -Id $id
+    }
     $res = $attempt.Output
     $code = $attempt.ExitCode
     if ($LogFile) {

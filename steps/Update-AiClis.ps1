@@ -92,10 +92,16 @@ function Get-ExeVersion {
     if ($m.Success) { $m.Value } else { 'unknown' }
 }
 
+# Asked once per package per run: the npm and own-installer checks below
+# both need it, and each `npm view` is a registry round trip.
+$script:npmLatest = @{}
 function Get-NpmLatest {
     param([string]$Package)
     if (-not $hasNpm) { return '' }
-    "$(npm view $Package version 2>$null)".Trim()
+    if (-not $script:npmLatest.ContainsKey($Package)) {
+        $script:npmLatest[$Package] = "$(npm view $Package version 2>$null)".Trim()
+    }
+    $script:npmLatest[$Package]
 }
 
 # The installed version of a winget package, or $null when winget does not

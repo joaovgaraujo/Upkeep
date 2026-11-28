@@ -266,15 +266,18 @@ echo [setup] Writing topgrade config...
     rem hang. Update ollama models manually when you want to: ollama pull <model>
     rem Store and Windows servicing have their own steps below. Disable
     rem both here to avoid duplicate work and honor the category skip flags.
-    rem claude_code too: steps\Update-AiClis.ps1 updates Claude Code through
-    rem whichever channel installed it, and topgrade ran "claude update" a
-    rem second time on every run. claude_code_plugins stays on; nothing else
+    rem claude_code and codex too: steps\Update-AiClis.ps1 updates Claude Code
+    rem and Codex through whichever channel installed them, and topgrade ran
+    rem "claude update" / "codex update" a second time on every run.
+    rem Steps that replace a binary winget may own (self_update, tailscale,
+    rem wsl_update, uv, antigravity_cli) are disabled per run by
+    rem steps\Protect-InUsePackages.ps1 when winget tracks that app. claude_code_plugins stays on; nothing else
     rem updates the plugin marketplaces.
     rem User mode adds the steps that need administrator rights.
     if "%USER_MODE%"=="1" (
-    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system", "claude_code", "chocolatey", "wsl_update", "tailscale", "microsoft_office", "powershell"]
+    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system", "claude_code", "codex", "chocolatey", "wsl_update", "tailscale", "microsoft_office", "powershell"]
     ) else (
-    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system", "claude_code"]
+    echo disable = ["containers", "node", "pipx", "winget", "ollama", "microsoft_store", "system", "claude_code", "codex"]
     )
     echo.
     echo [windows]
