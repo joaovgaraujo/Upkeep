@@ -361,14 +361,14 @@ if ($SkipRestorePoint) {
     try {
         Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction Stop
 
-        # Windows silently refuses a second restore point within 24h unless
-        # this frequency guard is lifted; set it to 0 like winutil does.
-        $srPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
-        # Respect Windows restore-point frequency policy.
-
-        Checkpoint-Computer -Description 'Setup-NewPC' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
-        Write-Output "[restore] Restore point created."
-        Add-PhaseResult 'Restore point' 'OK'
+        $checkpointWarnings = @()
+        Checkpoint-Computer -Description 'Setup-NewPC' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop -WarningVariable checkpointWarnings
+        if ($checkpointWarnings.Count -gt 0) {
+            Add-PhaseResult 'Restore point' 'Warning' ($checkpointWarnings -join ' ')
+        } else {
+            Write-Output "[restore] Restore point created."
+            Add-PhaseResult 'Restore point' 'OK'
+        }
     } catch {
         Write-Output "[restore] WARNING: Could not create a restore point: $($_.Exception.Message)"
         Write-Output "[restore] Continuing without one."
@@ -410,6 +410,7 @@ function Invoke-WinutilConfig {
         $selections = @((Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json))
         $hosts = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
         if (Test-Path -LiteralPath $hosts) { Copy-Item -LiteralPath $hosts -Destination (Join-Path $reportDir 'hosts-before.txt') -ErrorAction Stop }
+        $selectionNumber = 0
         foreach ($selection in $selections) {
             try {
                 # Upstream rejects the entire import on unknown IDs. Isolate each
@@ -418,19 +419,52 @@ function Invoke-WinutilConfig {
                     Add-PhaseResult "Tweak $selection" 'Skipped' 'No longer available in upstream winutil; other selections continue.'
                     continue
                 }
-                $singleConfig = Join-Path $reportDir 'winutil-selection.json'
+                if ($selection -eq 'WPFTweaksDisableStoreSearch') {
+                    $storeState = Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsStore_8wekyb3d8bbwe\LocalState'
+                    $database = Join-Path $storeState 'store.db'
+                    if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
+                        $candidates = @(Get-ChildItem -LiteralPath $storeState -File -Filter 'store-*.db' -ErrorAction SilentlyContinue |
+                            Where-Object Name -Match '^store-[0-9a-f]{32}\.db$')
+                        if ($candidates.Count -ne 1) {
+                            Add-PhaseResult "Tweak $selection" 'Skipped' "Expected one versioned Store database, found $($candidates.Count). Open Microsoft Store and retry if no database exists."
+                            continue
+                        }
+                        $database = $candidates[0].FullName
+                    }
+                    $aclBackup = Join-Path $reportDir 'store-search-acl.txt'
+                    if (-not (Test-Path -LiteralPath $aclBackup)) {
+                        & icacls.exe $database /save $aclBackup | Write-Output
+                        if ($LASTEXITCODE -ne 0) { throw "Store database ACL backup failed (icacls exit $LASTEXITCODE)." }
+                    }
+                    & icacls.exe $database /deny '*S-1-1-0:F' | Write-Output
+                    if ($LASTEXITCODE -ne 0) { throw "Store search tweak failed (icacls exit $LASTEXITCODE)." }
+                    Add-PhaseResult "Tweak $selection" 'Completed' "Store database permissions updated. Backup: $aclBackup"
+                    continue
+                }
+                $selectionNumber++
+                $reportPrefix = Join-Path $reportDir ('winutil-{0:D2}-{1}' -f $selectionNumber, $selection)
+                $singleConfig = "$reportPrefix.json"
+                $stdoutPath = "$reportPrefix.stdout.log"
+                $stderrPath = "$reportPrefix.stderr.log"
+                $logDetail = "Logs: $stdoutPath and $stderrPath"
                 ConvertTo-Json -InputObject @($selection) | Set-Content -LiteralPath $singleConfig -Encoding UTF8
                 $winutilArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$winutilFile`"", '-Config', "`"$singleConfig`"")
-                $proc = Start-Process powershell.exe -ArgumentList $winutilArgs -NoNewWindow -PassThru
-                $null = $proc.Handle
+                $proc = Start-Process powershell.exe -ArgumentList $winutilArgs -NoNewWindow -PassThru -ErrorAction Stop `
+                    -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
                 try {
+                    $null = $proc.Handle
                     if (-not $proc.WaitForExit($timeoutMin * 60 * 1000)) {
                         & taskkill.exe /PID $proc.Id /T /F | Out-Null
-                        throw "Timed out after $timeoutMin minutes. Restart manually if servicing is pending, then retry."
+                        throw "Timed out after $timeoutMin minutes. Restart manually if servicing is pending, then retry. $logDetail"
                     }
                     $proc.WaitForExit()
-                    if ($proc.ExitCode -ne 0) { throw "winutil exited $($proc.ExitCode). See setup.log." }
-                    Add-PhaseResult "Tweak $selection" 'Completed' 'winutil exited 0; review setup.log for upstream warnings.'
+                    if ($proc.ExitCode -ne 0) { throw "winutil exited $($proc.ExitCode). $logDetail" }
+                    # Winutil reports warnings in its headless summary and still exits 0.
+                    if (Select-String -LiteralPath $stdoutPath -Pattern '^Completed with warnings\.' -Quiet) {
+                        Add-PhaseResult "Tweak $selection" 'Warning' "winutil completed with warnings. $logDetail"
+                    } else {
+                        Add-PhaseResult "Tweak $selection" 'Completed' "winutil exited 0. $logDetail"
+                    }
                 } finally { $proc.Dispose() }
             } catch { Add-PhaseResult "Tweak $selection" 'Failed' $_.Exception.Message }
         }

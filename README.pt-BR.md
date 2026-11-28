@@ -11,6 +11,21 @@ Windows Update, a Microsoft Store, Steam e JDownloader. Também traz um
 caminho para PC novo: ponto de restauração, ajustes, drivers e um catálogo de
 apps com predefinições.
 
+## Git em uma instalação nova do Windows 11
+
+Antes de clonar, execute `git --version`. Se o Windows exibir **Bad Image**
+para uma DLL do Git, como `zlib1.dll`, com o código `0xc0e90002`, confira
+o log **Microsoft → Windows → CodeIntegrity → Operational** no Visualizador
+de Eventos. O evento 3077 com a política `VerifiedAndReputableDesktop`
+identifica um bloqueio do Smart App Control.
+
+Use um cliente Git aprovado ou o instalador da versão, se disponível.
+Se você administra o PC e optar por desativar o Smart App Control, abra
+**Segurança do Windows → Controle de aplicativos e navegador → Configurações
+do Smart App Control → Desativado**. Depois, execute `git --version` e
+tente clonar novamente. Essa configuração afeta a proteção de todo o PC.
+Em um dispositivo gerenciado, peça uma instalação aprovada ao administrador.
+
 ## Leia antes de rodar
 
 **O Upkeep roda com privilégios de administrador.** A interface carrega um
